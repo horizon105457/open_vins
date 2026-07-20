@@ -24,8 +24,7 @@
 #include "feat/Feature.h"
 #include "feat/FeatureDatabase.h"
 #include "feat/FeatureInitializer.h"
-// TODO(P6): replace with trackTAG include
-// #include "track/TrackAruco.h"
+#include "track/TrackAprilTag.h"
 #include "track/TrackDescriptor.h"
 #include "track/TrackKLT.h"
 #include "track/TrackSIM.h"
@@ -41,6 +40,7 @@
 #include "state/State.h"
 #include "state/StateHelper.h"
 #include "update/UpdaterMSCKF.h"
+#include "update/UpdaterTag.h"
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
 
@@ -140,11 +140,21 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
         params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist, params.knn_ratio));
   }
 
-  // TODO(P6): replace with trackTAG construction
-  // if (params.use_aruco) {
-  //   trackARUCO = std::shared_ptr<TrackBase>(new TrackAruco(state->_cam_intrinsics_cameras, state->_options.max_aruco_features,
-  //                                                          params.use_stereo, params.histogram_method, params.downsize_aruco));
-  // }
+  if (params.use_tag) {
+    trackTAG = std::make_shared<ov_core::TrackAprilTag>(
+        state->_cam_intrinsics_cameras,
+        state->_options.max_tag_features,
+        params.tag_size, params.tag_family);
+
+    ov_msckf::UpdaterTag::Options tag_opt;
+    tag_opt.chi2_multipler = params.up_tag_chi2_multipler;
+    tag_opt.min_decision_margin = params.tag_min_decision_margin;
+    tag_opt.sigma_pix = params.up_tag_sigma_pix;
+    tag_opt.info_accum_weight = params.tag_info_accum_weight;
+    tag_opt.tag_pos_publish_threshold = params.tag_pos_publish_threshold;
+
+    updaterTAG = std::make_shared<ov_msckf::UpdaterTag>(state, propagator, tag_opt);
+  }
 
   // Initialize our state propagator
   propagator = std::make_shared<Propagator>(params.imu_noises, params.gravity_mag);
@@ -281,10 +291,9 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
   // Perform our feature tracking!
   trackFEATS->feed_new_camera(message);
 
-  // TODO(P6): replace with trackTAG feed
-  // if (is_initialized_vio && trackARUCO != nullptr) {
-  //   trackARUCO->feed_new_camera(message);
-  // }
+  if (params.use_tag && trackTAG != nullptr) {
+    trackTAG->feed_new_camera(message);
+  }
   rT2 = boost::posix_time::microsec_clock::local_time();
 
   // Check if we should do zero-velocity, if so update the state with it
@@ -323,6 +332,11 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
           trackARUCO->get_feature_database()->cleanup_measurements(cleanup_time);
       }
       return;
+    }
+    if (params.use_tag) {
+      int idx = state->_imu->id();
+      state->Cov().block(idx + 3, idx + 3, 3, 3) = params.init_cov_pos * Eigen::Matrix3d::Identity();
+      state->Cov()(idx + 2, idx + 2) = params.init_cov_yaw;
     }
   }
 
@@ -381,10 +395,9 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Don't need to get the oldest features until we reach our max number of clones
   if ((int)state->_clones_IMU.size() > state->_options.max_clone_size || (int)state->_clones_IMU.size() > 5) {
     feats_marg = trackFEATS->get_feature_database()->features_containing(state->margtimestep(), false, true);
-    // TODO(P6): trackTAG equivalent
-    // if (trackARUCO != nullptr && message.timestamp - startup_time >= params.dt_slam_delay) {
-    //   feats_slam = trackARUCO->get_feature_database()->features_containing(state->margtimestep(), false, true);
-    // }
+    if (trackTAG != nullptr && message.timestamp - startup_time >= params.dt_slam_delay) {
+      feats_slam = trackTAG->get_feature_database()->features_containing(state->margtimestep(), false, true);
+    }
   }
 
   // Remove any lost features that were from other image streams
@@ -439,21 +452,20 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
     }
   }
 
-  // Count how many aruco tags we have in our state
-  int curr_aruco_tags = 0;
+  int curr_tag_tags = 0;
   auto it0 = state->_features_SLAM.begin();
   while (it0 != state->_features_SLAM.end()) {
-    if ((int)(*it0).second->_featid <= 4 * state->_options.max_tag_features)
-      curr_aruco_tags++;
+    if (state->_options.is_tag_feature((int)(*it0).second->_featid))
+      curr_tag_tags++;
     it0++;
   }
 
   // Append a new SLAM feature if we have the room to do so
   // Also check that we have waited our delay amount (normally prevents bad first set of slam points)
   if (state->_options.max_slam_features > 0 && message.timestamp - startup_time >= params.dt_slam_delay &&
-      (int)state->_features_SLAM.size() < state->_options.max_slam_features + curr_aruco_tags) {
+      (int)state->_features_SLAM.size() < state->_options.max_slam_features + curr_tag_tags) {
     // Get the total amount to add, then the max amount that we can add given our marginalize feature array
-    int amount_to_add = (state->_options.max_slam_features + curr_aruco_tags) - (int)state->_features_SLAM.size();
+    int amount_to_add = (state->_options.max_slam_features + curr_tag_tags) - (int)state->_features_SLAM.size();
     int valid_amount = (amount_to_add > (int)feats_maxtracks.size()) ? (int)feats_maxtracks.size() : amount_to_add;
     // If we have at least 1 that we can add, lets add it!
     // Note: we remove them from the feat_marg array since we don't want to reuse information...
@@ -469,12 +481,11 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // NOTE: if you do not use FEJ, these types of slam features *degrade* the estimator performance....
   // NOTE: we will also marginalize SLAM features if they have failed their update a couple times in a row
   for (std::pair<const size_t, std::shared_ptr<Landmark>> &landmark : state->_features_SLAM) {
-    // TODO(P6): trackTAG equivalent
-    // if (trackARUCO != nullptr) {
-    //   std::shared_ptr<Feature> feat1 = trackARUCO->get_feature_database()->get_feature(landmark.second->_featid);
-    //   if (feat1 != nullptr)
-    //     feats_slam.push_back(feat1);
-    // }
+    if (trackTAG != nullptr) {
+      std::shared_ptr<Feature> feat1 = trackTAG->get_feature_database()->get_feature(landmark.second->_featid);
+      if (feat1 != nullptr)
+        feats_slam.push_back(feat1);
+    }
     std::shared_ptr<Feature> feat2 = trackFEATS->get_feature_database()->get_feature(landmark.second->_featid);
     if (feat2 != nullptr)
       feats_slam.push_back(feat2);
@@ -538,6 +549,16 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   propagator->invalidate_cache();
   rT4 = boost::posix_time::microsec_clock::local_time();
 
+  if (params.use_tag && updaterTAG != nullptr && trackTAG != nullptr) {
+    auto track_tag = std::dynamic_pointer_cast<ov_core::TrackAprilTag>(trackTAG);
+    if (track_tag != nullptr) {
+      auto candidates = track_tag->get_pnp_candidates();
+      if (!candidates.empty()) {
+        updaterTAG->update(candidates, state->_timestamp, params.tags);
+      }
+    }
+  }
+
   // Perform SLAM delay init and update
   // NOTE: that we provide the option here to do a *sequential* update
   // NOTE: this will be a lot faster but won't be as accurate.
@@ -589,10 +610,9 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // This allows for measurements to be used in the future if they failed to be used this time
   // Note we need to do this before we feed a new image, as we want all new measurements to NOT be deleted
   trackFEATS->get_feature_database()->cleanup();
-  // TODO(P6): trackTAG equivalent
-  // if (trackARUCO != nullptr) {
-  //   trackARUCO->get_feature_database()->cleanup();
-  // }
+  if (trackTAG != nullptr) {
+    trackTAG->get_feature_database()->cleanup();
+  }
 
   // First do anchor change if we are about to lose an anchor pose
   updaterSLAM->change_anchors(state);
@@ -600,10 +620,9 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Cleanup any features older than the marginalization time
   if ((int)state->_clones_IMU.size() > state->_options.max_clone_size) {
     trackFEATS->get_feature_database()->cleanup_measurements(state->margtimestep());
-    // TODO(P6): trackTAG equivalent
-    // if (trackARUCO != nullptr) {
-    //   trackARUCO->get_feature_database()->cleanup_measurements(state->margtimestep());
-    // }
+    if (trackTAG != nullptr) {
+      trackTAG->get_feature_database()->cleanup_measurements(state->margtimestep());
+    }
   }
 
   // Finally marginalize the oldest clone if needed
@@ -724,5 +743,34 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
                state->_calib_imu_tg->value()(1), state->_calib_imu_tg->value()(2), state->_calib_imu_tg->value()(3),
                state->_calib_imu_tg->value()(4), state->_calib_imu_tg->value()(5), state->_calib_imu_tg->value()(6),
                state->_calib_imu_tg->value()(7), state->_calib_imu_tg->value()(8));
+  }
+}
+
+VioManager::~VioManager() {
+  if (params.use_tag && !params.tags.empty()) {
+    std::string path = params.tag_config_path + ".calibrated";
+    try {
+      cv::FileStorage fs(path, cv::FileStorage::WRITE);
+      fs << "known_tag_positions" << "{";
+      for (auto &[id, entry] : params.tags) {
+        if (entry.info.norm() < 1e-10)
+          continue;
+        fs << std::to_string(id) << "{";
+        std::vector<double> pose_vec(entry.pose.data(), entry.pose.data() + 7);
+        fs << "pose" << pose_vec;
+        std::vector<double> sigma_rot(3);
+        for (int d = 0; d < 3; d++)
+          sigma_rot[d] = (entry.info(d) > 0) ? std::sqrt(1.0 / entry.info(d)) : 0.0;
+        fs << "sigma_rot" << sigma_rot;
+        std::vector<double> sigma_pos(3);
+        for (int d = 0; d < 3; d++)
+          sigma_pos[d] = (entry.info(3 + d) > 0) ? std::sqrt(1.0 / entry.info(3 + d)) : 0.0;
+        fs << "sigma_pos" << sigma_pos;
+        fs << "}";
+      }
+      fs << "}";
+      fs.release();
+    } catch (...) {
+    }
   }
 }

@@ -69,6 +69,8 @@ list(APPEND LIBRARY_SOURCES
 list(APPEND LIBRARY_SOURCES src/ros/ROS2Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)
 if(ENABLE_APRILTAG_TAGS)
   list(APPEND LIBRARY_SOURCES src/update/UpdaterTag.cpp)
+  find_package(apriltag REQUIRED)
+  list(APPEND thirdparty_libraries apriltag)
 endif()
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_msckf_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})

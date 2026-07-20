@@ -48,6 +48,7 @@ namespace ov_msckf {
 class State;
 class StateHelper;
 class UpdaterMSCKF;
+class UpdaterTag;
 class UpdaterSLAM;
 class UpdaterZeroVelocity;
 class Propagator;
@@ -67,6 +68,9 @@ public:
    * @param params_ Parameters loaded from either ROS or CMDLINE
    */
   VioManager(VioManagerOptions &params_);
+
+  /// Destructor, triggers tag database persistence
+  ~VioManager();
 
   /**
    * @brief Feed function for inertial data
@@ -188,8 +192,14 @@ protected:
   /// Our sparse feature tracker (klt or descriptor)
   std::shared_ptr<ov_core::TrackBase> trackFEATS;
 
-  /// Our aruoc tracker
-  std::shared_ptr<ov_core::TrackBase> trackARUCO;
+  /// Our tag tracker (AprilTag)
+  std::shared_ptr<ov_core::TrackBase> trackTAG;
+
+  /// Our tag updater (PnP-based absolute pose EKF update)
+  std::shared_ptr<ov_msckf::UpdaterTag> updaterTAG;
+
+  /// Signal to persist tag database on next cycle
+  std::atomic<bool> should_save_tags_{false};
 
   /// State initializer
   std::shared_ptr<ov_init::InertialInitializer> initializer;

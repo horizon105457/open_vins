@@ -80,6 +80,9 @@ public:
    */
   int max_covariance_size() { return (int)_Cov.rows(); }
 
+  /// Accessor to the full covariance matrix for direct manipulation
+  Eigen::MatrixXd &Cov() { return _Cov; }
+
   /**
    * @brief Gyroscope and accelerometer intrinsic matrix (scale imperfection and axis misalignment)
    *

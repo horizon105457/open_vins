@@ -158,7 +158,7 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
 
     // If we are using single inverse depth, then it is equivalent to using the msckf inverse depth
     auto feat_rep =
-        ((int)feat.featid < state->_options.max_tag_features) ? state->_options.feat_rep_tag : state->_options.feat_rep_slam;
+        (state->_options.is_tag_feature((int)feat.featid)) ? state->_options.feat_rep_tag : state->_options.feat_rep_slam;
     feat.feat_representation = feat_rep;
     if (feat_rep == LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) {
       feat.feat_representation = LandmarkRepresentation::Representation::ANCHORED_MSCKF_INVERSE_DEPTH;
@@ -224,12 +224,12 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
 
     // Measurement noise matrix
     double sigma_pix_sq =
-        ((int)feat.featid < state->_options.max_tag_features) ? _options_tag.sigma_pix_sq : _options_slam.sigma_pix_sq;
+        (state->_options.is_tag_feature((int)feat.featid)) ? _options_tag.sigma_pix_sq : _options_slam.sigma_pix_sq;
     Eigen::MatrixXd R = sigma_pix_sq * Eigen::MatrixXd::Identity(res.rows(), res.rows());
 
     // Try to initialize, delete new pointer if we failed
     double chi2_multipler =
-        ((int)feat.featid < state->_options.max_tag_features) ? _options_tag.chi2_multipler : _options_slam.chi2_multipler;
+        (state->_options.is_tag_feature((int)feat.featid)) ? _options_tag.chi2_multipler : _options_slam.chi2_multipler;
     if (StateHelper::initialize(state, landmark, Hx_order, H_x, H_f, R, res, chi2_multipler)) {
       state->_features_SLAM.insert({(*it2)->featid, landmark});
       (*it2)->to_delete = true;
@@ -390,7 +390,7 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
     Eigen::MatrixXd P_marg = StateHelper::get_marginal_covariance(state, Hxf_order);
     Eigen::MatrixXd S = H_xf * P_marg * H_xf.transpose();
     double sigma_pix_sq =
-        ((int)feat.featid < state->_options.max_tag_features) ? _options_tag.sigma_pix_sq : _options_slam.sigma_pix_sq;
+        (state->_options.is_tag_feature((int)feat.featid)) ? _options_tag.sigma_pix_sq : _options_slam.sigma_pix_sq;
     S.diagonal() += sigma_pix_sq * Eigen::VectorXd::Ones(S.rows());
     double chi2 = res.dot(S.llt().solve(res));
 
@@ -406,9 +406,9 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
 
     // Check if we should delete or not
     double chi2_multipler =
-        ((int)feat.featid < state->_options.max_tag_features) ? _options_tag.chi2_multipler : _options_slam.chi2_multipler;
+        (state->_options.is_tag_feature((int)feat.featid)) ? _options_tag.chi2_multipler : _options_slam.chi2_multipler;
     if (chi2 > chi2_multipler * chi2_check) {
-      if ((int)feat.featid < state->_options.max_tag_features) {
+      if (state->_options.is_tag_feature((int)feat.featid)) {
         PRINT_WARNING(YELLOW "[SLAM-UP]: rejecting aruco tag %d for chi2 thresh (%.3f > %.3f)\n" RESET, (int)feat.featid, chi2,
                       chi2_multipler * chi2_check);
       } else {
@@ -420,7 +420,7 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
     }
 
     // Debug print when we are going to update the aruco tags
-    if ((int)feat.featid < state->_options.max_tag_features) {
+    if (state->_options.is_tag_feature((int)feat.featid)) {
       PRINT_DEBUG("[SLAM-UP]: accepted aruco tag %d for chi2 thresh (%.3f < %.3f)\n", (int)feat.featid, chi2, chi2_multipler * chi2_check);
     }
 
