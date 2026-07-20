@@ -24,6 +24,7 @@
 
 #include <Eigen/Eigen>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -45,6 +46,17 @@
 #include "utils/quat_ops.h"
 
 namespace ov_msckf {
+
+/**
+ * @brief Database entry for a single known AprilTag
+ */
+struct TagEntry {
+  double size = 0.0;                                  // physical side length (m)
+  Eigen::Matrix<double, 7, 1> pose;                   // T_world_tag: [x,y,z, qx,qy,qz,qw]
+  Eigen::Matrix<double, 6, 1> info =                  // info diagonal, tag local frame
+      Eigen::Matrix<double, 6, 1>::Zero();             // I_tag[d]=0 → no prior info
+  Eigen::Matrix3d R_tag2world;                         // precomputed rotation from world to tag
+};
 
 /**
  * @brief Struct which stores all options needed for state estimation.
@@ -402,6 +414,26 @@ struct VioManagerOptions {
   /// If should extract AprilTag tags and estimate them
   bool use_tag = false;
 
+  // Tag detection parameters
+  double init_cov_pos = 0.0025;          // position init variance (m²); default = 0.05²
+  double init_cov_yaw = 0.0004;          // yaw init variance (rad²); default = 0.02²
+  double tag_pos_publish_threshold = 0.01;
+  std::string tag_family = "36h11";
+  double tag_size = 0.165;
+  std::string tag_config_path;
+  double max_detection_hz = 15.0;
+  double tag_info_accum_weight = 1.0;
+
+  // Two-tier filtering thresholds
+  double up_tag_sigma_pix = 1.0;
+  double up_tag_chi2_multipler = 1.0;
+  int tag_min_edge_px = 20;
+  int tag_max_hamming = 2;
+  double tag_min_decision_margin = 0.5;
+
+  // Tag database
+  std::map<int, TagEntry> tags;
+
   /// Will half the resolution of the aruco tag image (will be faster)
   bool downsize_aruco = true;
 
@@ -455,6 +487,51 @@ struct VioManagerOptions {
       parser->parse_config("use_stereo", use_stereo);
       parser->parse_config("use_klt", use_klt);
       parser->parse_config("use_tag", use_tag);
+      parser->parse_config("init_cov_pos", init_cov_pos);
+      parser->parse_config("init_cov_yaw", init_cov_yaw);
+      parser->parse_config("tag_pos_publish_threshold", tag_pos_publish_threshold);
+      parser->parse_config("tag_family", tag_family);
+      parser->parse_config("tag_size", tag_size);
+      parser->parse_config("tag_config", tag_config_path);
+      parser->parse_config("max_detection_hz", max_detection_hz);
+      parser->parse_config("tag_info_accum_weight", tag_info_accum_weight);
+      parser->parse_config("up_tag_sigma_pix", up_tag_sigma_pix);
+      parser->parse_config("up_tag_chi2_multipler", up_tag_chi2_multipler);
+      parser->parse_config("tag_min_edge_px", tag_min_edge_px);
+      parser->parse_config("tag_max_hamming", tag_max_hamming);
+      parser->parse_config("tag_min_decision_margin", tag_min_decision_margin);
+
+      // Load tag database if tag_config_path is set
+      if (!tag_config_path.empty()) {
+        std::string tag_config_abs = tag_config_path;
+        cv::FileStorage fs(tag_config_abs, cv::FileStorage::READ);
+        if (fs.isOpened()) {
+          cv::FileNode known_tags = fs["known_tag_positions"];
+          if (!known_tags.empty() && known_tags.type() == cv::FileNode::MAP) {
+            for (auto it = known_tags.begin(); it != known_tags.end(); ++it) {
+              int id = std::stoi((*it).name());
+              TagEntry entry;
+              cv::FileNode tag_node = *it;
+              std::vector<double> pose_vec;
+              tag_node["pose"] >> pose_vec;
+              for (int i = 0; i < 7 && i < (int)pose_vec.size(); i++)
+                entry.pose(i) = pose_vec[i];
+              std::vector<double> rot_sig, pos_sig;
+              tag_node["sigma_rot"] >> rot_sig;
+              tag_node["sigma_pos"] >> pos_sig;
+              for (int d = 0; d < 3 && d < (int)rot_sig.size(); d++)
+                entry.info(d) = (rot_sig[d] > 0) ? 1.0 / (rot_sig[d] * rot_sig[d]) : 0.0;
+              for (int d = 0; d < 3 && d < (int)pos_sig.size(); d++)
+                entry.info(3 + d) = (pos_sig[d] > 0) ? 1.0 / (pos_sig[d] * pos_sig[d]) : 0.0;
+              entry.size = tag_size;
+              entry.R_tag2world = ov_core::quat_2_Rot(entry.pose.tail<4>()).transpose();
+              tags[id] = entry;
+            }
+          }
+          fs.release();
+        }
+      }
+
       parser->parse_config("downsize_aruco", downsize_aruco);
       parser->parse_config("downsample_cameras", downsample_cameras);
       parser->parse_config("num_opencv_threads", num_opencv_threads);
@@ -487,6 +564,11 @@ struct VioManagerOptions {
     PRINT_DEBUG("  - use_stereo: %d\n", use_stereo);
     PRINT_DEBUG("  - use_klt: %d\n", use_klt);
     PRINT_DEBUG("  - use_tag: %d\n", use_tag);
+    PRINT_DEBUG("  - init_cov_pos: %.4f\n", init_cov_pos);
+    PRINT_DEBUG("  - init_cov_yaw: %.4f\n", init_cov_yaw);
+    PRINT_DEBUG("  - tag_family: %s\n", tag_family.c_str());
+    PRINT_DEBUG("  - tag_size: %.3f\n", tag_size);
+    PRINT_DEBUG("  - tag_config: %s\n", tag_config_path.c_str());
     PRINT_DEBUG("  - downsize aruco: %d\n", downsize_aruco);
     PRINT_DEBUG("  - downsize cameras: %d\n", downsample_cameras);
     PRINT_DEBUG("  - num opencv threads: %d\n", num_opencv_threads);

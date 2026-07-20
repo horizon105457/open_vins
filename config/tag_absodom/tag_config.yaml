@@ -1,0 +1,10 @@
+%YAML:1.0
+
+# Known AprilTag world-positions database.
+# Each entry: tag ID → 6-DOF pose in world frame + per-axis uncertainty.
+# sigma = null means no prior information in that direction.
+known_tag_positions:
+  # 0:
+  #   pose: [0.0, 0.0, 0.0,  0.0, 0.0, 0.0, 1.0]
+  #   sigma_rot: [0.005, 0.005, 0.005]
+  #   sigma_pos: [0.001, 0.001, 0.001]
