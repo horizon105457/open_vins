@@ -54,8 +54,15 @@ list(APPEND LIBRARY_SOURCES
         src/feat/FeatureInitializer.cpp
         src/utils/print.cpp
 )
+if(ENABLE_APRILTAG_TAGS)
+  list(APPEND LIBRARY_SOURCES src/track/TrackAprilTag.cpp)
+endif()
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")
 add_library(ov_core_lib SHARED ${LIBRARY_SOURCES} ${LIBRARY_HEADERS})
+if(ENABLE_APRILTAG_TAGS)
+  target_link_libraries(ov_core_lib apriltag)
+  target_compile_definitions(ov_core_lib PUBLIC ENABLE_APRILTAG_TAGS)
+endif()
 target_link_libraries(ov_core_lib ${thirdparty_libraries})
 target_include_directories(ov_core_lib PUBLIC src/)
 install(TARGETS ov_core_lib
