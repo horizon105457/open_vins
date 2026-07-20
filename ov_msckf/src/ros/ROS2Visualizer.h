@@ -40,6 +40,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/transform_datatypes.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -66,6 +67,7 @@ namespace ov_msckf {
 
 class VioManager;
 class Simulator;
+struct TagEntry;
 
 /**
  * @brief Helper class that will publish results onto the ROS framework.
@@ -98,6 +100,12 @@ public:
    * @brief Will visualize the system if we have new things
    */
   void visualize();
+
+  /**
+   * @brief Visualize tag map as MarkerArray (cubes + text labels)
+   * @param tags Map of tag ID to TagEntry
+   */
+  void visualize_tags(const std::map<int, ov_msckf::TagEntry> &tags);
 
   /**
    * @brief Will publish our odometry message for the current timestep.
@@ -148,6 +156,7 @@ protected:
 
   // Our publishers
   image_transport::Publisher it_pub_tracks, it_pub_loop_img_depth, it_pub_loop_img_depth_color;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_tag_map_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_poseimu;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odomimu;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_pathimu;

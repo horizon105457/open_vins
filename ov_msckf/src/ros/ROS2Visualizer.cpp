@@ -64,6 +64,10 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
   pub_points_sim = node->create_publisher<sensor_msgs::msg::PointCloud2>("points_sim", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_points_sim->get_topic_name());
 
+  // Tag map visualization
+  pub_tag_map_ = node->create_publisher<visualization_msgs::msg::MarkerArray>("tag_map", 1);
+  PRINT_DEBUG("Publishing: %s\n", pub_tag_map_->get_topic_name());
+
   // Our tracking image
   it_pub_tracks = it.advertise("trackhist", 2);
   PRINT_DEBUG("Publishing: %s\n", it_pub_tracks.getTopic().c_str());
@@ -277,6 +281,61 @@ void ROS2Visualizer::visualize() {
   // rT0_2 = boost::posix_time::microsec_clock::local_time();
   // double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
   // PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for visualization\n" RESET, time_total);
+}
+
+void ROS2Visualizer::visualize_tags(const std::map<int, ov_msckf::TagEntry> &tags) {
+
+  visualization_msgs::msg::MarkerArray markers;
+
+  for (auto &[id, entry] : tags) {
+
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = "world";
+    marker.header.stamp = rclcpp::Clock().now();
+    marker.ns = "tag_map";
+    marker.id = id;
+    marker.type = visualization_msgs::msg::Marker::CUBE;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+
+    marker.pose.position.x = entry.pose(0);
+    marker.pose.position.y = entry.pose(1);
+    marker.pose.position.z = entry.pose(2);
+    marker.pose.orientation.x = entry.pose(3);
+    marker.pose.orientation.y = entry.pose(4);
+    marker.pose.orientation.z = entry.pose(5);
+    marker.pose.orientation.w = entry.pose(6);
+
+    double s = entry.size;
+    marker.scale.x = s;
+    marker.scale.y = s;
+    marker.scale.z = 0.01;
+    marker.color.a = 0.8;
+    marker.color.r = 0.0;
+    marker.color.g = 1.0;
+    marker.color.b = 0.0;
+
+    markers.markers.push_back(marker);
+
+    visualization_msgs::msg::Marker text;
+    text.header.frame_id = "world";
+    text.header.stamp = marker.header.stamp;
+    text.ns = "tag_labels";
+    text.id = id;
+    text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    text.action = visualization_msgs::msg::Marker::ADD;
+    text.pose.position.x = entry.pose(0);
+    text.pose.position.y = entry.pose(1);
+    text.pose.position.z = entry.pose(2) + 0.1;
+    text.scale.z = 0.05;
+    text.color.a = 1.0;
+    text.color.r = 1.0;
+    text.color.g = 1.0;
+    text.color.b = 1.0;
+    text.text = std::to_string(id);
+    markers.markers.push_back(text);
+  }
+
+  pub_tag_map_->publish(markers);
 }
 
 void ROS2Visualizer::visualize_odometry(double timestamp) {
