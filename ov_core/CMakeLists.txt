@@ -13,6 +13,10 @@ message(STATUS "OPENCV: " ${OpenCV_VERSION} " | BOOST: " ${Boost_VERSION})
 
 # By default we build with ROS, but you can disable this and just build as a library
 option(ENABLE_ROS "Enable or disable building with ROS (if it is found)" ON)
+option(ENABLE_APRILTAG_TAGS "Enable or disable AprilTag support" OFF)
+if(ENABLE_APRILTAG_TAGS)
+  add_subdirectory(thirdparty/apriltag)
+endif()
 
 # check if we have our python libs files (will search for python3 then python2 installs)
 # sudo apt-get install python-matplotlib python-numpy python-dev
