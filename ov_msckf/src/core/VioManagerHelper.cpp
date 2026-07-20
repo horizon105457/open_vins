@@ -59,9 +59,10 @@ void VioManager::initialize_with_gt(Eigen::Matrix<double, 17, 1> imustate) {
 
   // Cleanup any features older then the initialization time
   trackFEATS->get_feature_database()->cleanup_measurements(state->_timestamp);
-  if (trackARUCO != nullptr) {
-    trackARUCO->get_feature_database()->cleanup_measurements(state->_timestamp);
-  }
+  // TODO(P6): trackTAG equivalent
+  // if (trackARUCO != nullptr) {
+  //   trackARUCO->get_feature_database()->cleanup_measurements(state->_timestamp);
+  // }
 
   // Print what we init'ed with
   PRINT_DEBUG(GREEN "[INIT]: INITIALIZED FROM GROUNDTRUTH FILE!!!!!\n" RESET);
@@ -122,9 +123,10 @@ bool VioManager::try_to_initialize(const ov_core::CameraData &message) {
       // NOTE: we will split the total number of features over all cameras uniformly
       trackFEATS->get_feature_database()->cleanup_measurements(state->_timestamp);
       trackFEATS->set_num_features(std::floor((double)params.num_pts / (double)params.state_options.num_cameras));
-      if (trackARUCO != nullptr) {
-        trackARUCO->get_feature_database()->cleanup_measurements(state->_timestamp);
-      }
+      // TODO(P6): trackTAG equivalent
+      // if (trackARUCO != nullptr) {
+      //   trackARUCO->get_feature_database()->cleanup_measurements(state->_timestamp);
+      // }
 
       // If we are moving then don't do zero velocity update4
       if (state->_imu->vel().norm() > params.zupt_max_velocity) {
@@ -405,10 +407,11 @@ cv::Mat VioManager::get_historical_viz_image() {
   // Get the current active tracks
   cv::Mat img_history;
   trackFEATS->display_history(img_history, 255, 255, 0, 255, 255, 255, highlighted_ids, overlay);
-  if (trackARUCO != nullptr) {
-    trackARUCO->display_history(img_history, 0, 255, 255, 255, 255, 255, highlighted_ids, overlay);
-    // trackARUCO->display_active(img_history, 0, 255, 255, 255, 255, 255, overlay);
-  }
+  // TODO(P6): trackTAG equivalent
+  // if (trackARUCO != nullptr) {
+  //   trackARUCO->display_history(img_history, 0, 255, 255, 255, 255, 255, highlighted_ids, overlay);
+  //   // trackARUCO->display_active(img_history, 0, 255, 255, 255, 255, 255, overlay);
+  // }
 
   // Finally return the image
   return img_history;
@@ -417,7 +420,7 @@ cv::Mat VioManager::get_historical_viz_image() {
 std::vector<Eigen::Vector3d> VioManager::get_features_SLAM() {
   std::vector<Eigen::Vector3d> slam_feats;
   for (auto &f : state->_features_SLAM) {
-    if ((int)f.first <= 4 * state->_options.max_aruco_features)
+    if ((int)f.first <= 4 * state->_options.max_tag_features)
       continue;
     if (ov_type::LandmarkRepresentation::is_relative_representation(f.second->_feat_representation)) {
       // Assert that we have an anchor pose for this feature
@@ -440,7 +443,7 @@ std::vector<Eigen::Vector3d> VioManager::get_features_SLAM() {
 std::vector<Eigen::Vector3d> VioManager::get_features_ARUCO() {
   std::vector<Eigen::Vector3d> aruco_feats;
   for (auto &f : state->_features_SLAM) {
-    if ((int)f.first > 4 * state->_options.max_aruco_features)
+    if ((int)f.first > 4 * state->_options.max_tag_features)
       continue;
     if (ov_type::LandmarkRepresentation::is_relative_representation(f.second->_feat_representation)) {
       // Assert that we have an anchor pose for this feature

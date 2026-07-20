@@ -76,8 +76,8 @@ struct StateOptions {
   /// Max number of MSCKF features we will use at a given image timestep.
   int max_msckf_in_update = 1000;
 
-  /// Max number of estimated ARUCO features
-  int max_aruco_features = 1024;
+  /// Max number of tag features (AprilTag, 4 features per tag at 4 corners)
+  int max_tag_features = 4096;
 
   /// Number of distinct cameras that we will observe features in
   int num_cameras = 1;
@@ -88,8 +88,13 @@ struct StateOptions {
   /// What representation our features are in (slam features)
   ov_type::LandmarkRepresentation::Representation feat_rep_slam = ov_type::LandmarkRepresentation::Representation::GLOBAL_3D;
 
-  /// What representation our features are in (aruco tag features)
-  ov_type::LandmarkRepresentation::Representation feat_rep_aruco = ov_type::LandmarkRepresentation::Representation::GLOBAL_3D;
+  /// What representation our features are in (tag features)
+  ov_type::LandmarkRepresentation::Representation feat_rep_tag = ov_type::LandmarkRepresentation::Representation::GLOBAL_3D;
+
+  /// Check if a feature ID belongs to a tag feature (AprilTag corner)
+  inline bool is_tag_feature(int featid) const {
+    return featid >= 0 && featid < 4 * max_tag_features;
+  }
 
   /// Nice print function of what parameters we have loaded
   void print(const std::shared_ptr<ov_core::YamlParser> &parser = nullptr) {
@@ -123,7 +128,7 @@ struct StateOptions {
       parser->parse_config("max_slam", max_slam_features);
       parser->parse_config("max_slam_in_update", max_slam_in_update);
       parser->parse_config("max_msckf_in_update", max_msckf_in_update);
-      parser->parse_config("num_aruco", max_aruco_features);
+      parser->parse_config("max_tag_features", max_tag_features);
       parser->parse_config("max_cameras", num_cameras);
 
       // Feature representations
@@ -133,9 +138,9 @@ struct StateOptions {
       std::string rep2 = ov_type::LandmarkRepresentation::as_string(feat_rep_slam);
       parser->parse_config("feat_rep_slam", rep2);
       feat_rep_slam = ov_type::LandmarkRepresentation::from_string(rep2);
-      std::string rep3 = ov_type::LandmarkRepresentation::as_string(feat_rep_aruco);
-      parser->parse_config("feat_rep_aruco", rep3);
-      feat_rep_aruco = ov_type::LandmarkRepresentation::from_string(rep3);
+      std::string rep3 = ov_type::LandmarkRepresentation::as_string(feat_rep_tag);
+      parser->parse_config("feat_rep_tag", rep3);
+      feat_rep_tag = ov_type::LandmarkRepresentation::from_string(rep3);
 
       // IMU model
       std::string imu_model_str = "kalibr";
@@ -167,11 +172,11 @@ struct StateOptions {
     PRINT_DEBUG("  - max_slam: %d\n", max_slam_features);
     PRINT_DEBUG("  - max_slam_in_update: %d\n", max_slam_in_update);
     PRINT_DEBUG("  - max_msckf_in_update: %d\n", max_msckf_in_update);
-    PRINT_DEBUG("  - max_aruco: %d\n", max_aruco_features);
+    PRINT_DEBUG("  - max_tag_features: %d\n", max_tag_features);
     PRINT_DEBUG("  - max_cameras: %d\n", num_cameras);
     PRINT_DEBUG("  - feat_rep_msckf: %s\n", ov_type::LandmarkRepresentation::as_string(feat_rep_msckf).c_str());
     PRINT_DEBUG("  - feat_rep_slam: %s\n", ov_type::LandmarkRepresentation::as_string(feat_rep_slam).c_str());
-    PRINT_DEBUG("  - feat_rep_aruco: %s\n", ov_type::LandmarkRepresentation::as_string(feat_rep_aruco).c_str());
+    PRINT_DEBUG("  - feat_rep_tag: %s\n", ov_type::LandmarkRepresentation::as_string(feat_rep_tag).c_str());
   }
 };
 

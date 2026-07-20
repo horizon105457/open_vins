@@ -15,15 +15,6 @@ message(STATUS "OPENCV: " ${OpenCV_VERSION} " | BOOST: " ${Boost_VERSION} " | CE
 # By default we build with ROS, but you can disable this and just build as a library
 option(ENABLE_ROS "Enable or disable building with ROS (if it is found)" ON)
 
-# If we will compile with aruco support
-option(ENABLE_ARUCO_TAGS "Enable or disable aruco tag (disable if no contrib modules)" ON)
-if (NOT ENABLE_ARUCO_TAGS)
-    add_definitions(-DENABLE_ARUCO_TAGS=0)
-    message(WARNING "DISABLING ARUCOTAG TRACKING!")
-else ()
-    add_definitions(-DENABLE_ARUCO_TAGS=1)
-endif ()
-
 # We need c++14 for ROS2, thus just require it for everybody
 # NOTE: To future self, hope this isn't an issue...
 set(CMAKE_CXX_STANDARD 14)

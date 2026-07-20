@@ -100,8 +100,8 @@ protected:
   /// Options used during update for slam features
   UpdaterOptions _options_slam;
 
-  /// Options used during update for aruco features
-  UpdaterOptions _options_aruco;
+  /// Options used during update for tag features
+  UpdaterOptions _options_tag;
 
   /// Feature initializer class object
   std::shared_ptr<ov_core::FeatureInitializer> initializer_feat;

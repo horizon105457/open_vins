@@ -24,7 +24,8 @@
 #include "feat/Feature.h"
 #include "feat/FeatureDatabase.h"
 #include "feat/FeatureInitializer.h"
-#include "track/TrackAruco.h"
+// TODO(P6): replace with trackTAG include
+// #include "track/TrackAruco.h"
 #include "track/TrackDescriptor.h"
 #include "track/TrackKLT.h"
 #include "track/TrackSIM.h"
@@ -131,19 +132,19 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
   int init_max_features = std::floor((double)params.init_options.init_max_features / (double)params.state_options.num_cameras);
   if (params.use_klt) {
     trackFEATS = std::shared_ptr<TrackBase>(new TrackKLT(state->_cam_intrinsics_cameras, init_max_features,
-                                                         state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
-                                                         params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
+                                                          state->_options.max_tag_features, params.use_stereo, params.histogram_method,
+                                                          params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
   } else {
     trackFEATS = std::shared_ptr<TrackBase>(new TrackDescriptor(
-        state->_cam_intrinsics_cameras, init_max_features, state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
+        state->_cam_intrinsics_cameras, init_max_features, state->_options.max_tag_features, params.use_stereo, params.histogram_method,
         params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist, params.knn_ratio));
   }
 
-  // Initialize our aruco tag extractor
-  if (params.use_aruco) {
-    trackARUCO = std::shared_ptr<TrackBase>(new TrackAruco(state->_cam_intrinsics_cameras, state->_options.max_aruco_features,
-                                                           params.use_stereo, params.histogram_method, params.downsize_aruco));
-  }
+  // TODO(P6): replace with trackTAG construction
+  // if (params.use_aruco) {
+  //   trackARUCO = std::shared_ptr<TrackBase>(new TrackAruco(state->_cam_intrinsics_cameras, state->_options.max_aruco_features,
+  //                                                          params.use_stereo, params.histogram_method, params.downsize_aruco));
+  // }
 
   // Initialize our state propagator
   propagator = std::make_shared<Propagator>(params.imu_noises, params.gravity_mag);
@@ -199,7 +200,7 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
   std::shared_ptr<TrackSIM> trackSIM = std::dynamic_pointer_cast<TrackSIM>(trackFEATS);
   if (trackSIM == nullptr) {
     // Replace with the simulated tracker
-    trackSIM = std::make_shared<TrackSIM>(state->_cam_intrinsics_cameras, state->_options.max_aruco_features);
+    trackSIM = std::make_shared<TrackSIM>(state->_cam_intrinsics_cameras, state->_options.max_tag_features);
     trackFEATS = trackSIM;
     // Need to also replace it in init and zv-upt since it points to the trackFEATS db pointer
     initializer = std::make_shared<ov_init::InertialInitializer>(params.init_options, trackFEATS->get_feature_database());
@@ -280,12 +281,10 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
   // Perform our feature tracking!
   trackFEATS->feed_new_camera(message);
 
-  // If the aruco tracker is available, the also pass to it
-  // NOTE: binocular tracking for aruco doesn't make sense as we by default have the ids
-  // NOTE: thus we just call the stereo tracking if we are doing binocular!
-  if (is_initialized_vio && trackARUCO != nullptr) {
-    trackARUCO->feed_new_camera(message);
-  }
+  // TODO(P6): replace with trackTAG feed
+  // if (is_initialized_vio && trackARUCO != nullptr) {
+  //   trackARUCO->feed_new_camera(message);
+  // }
   rT2 = boost::posix_time::microsec_clock::local_time();
 
   // Check if we should do zero-velocity, if so update the state with it
@@ -382,9 +381,10 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Don't need to get the oldest features until we reach our max number of clones
   if ((int)state->_clones_IMU.size() > state->_options.max_clone_size || (int)state->_clones_IMU.size() > 5) {
     feats_marg = trackFEATS->get_feature_database()->features_containing(state->margtimestep(), false, true);
-    if (trackARUCO != nullptr && message.timestamp - startup_time >= params.dt_slam_delay) {
-      feats_slam = trackARUCO->get_feature_database()->features_containing(state->margtimestep(), false, true);
-    }
+    // TODO(P6): trackTAG equivalent
+    // if (trackARUCO != nullptr && message.timestamp - startup_time >= params.dt_slam_delay) {
+    //   feats_slam = trackARUCO->get_feature_database()->features_containing(state->margtimestep(), false, true);
+    // }
   }
 
   // Remove any lost features that were from other image streams
@@ -443,7 +443,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   int curr_aruco_tags = 0;
   auto it0 = state->_features_SLAM.begin();
   while (it0 != state->_features_SLAM.end()) {
-    if ((int)(*it0).second->_featid <= 4 * state->_options.max_aruco_features)
+    if ((int)(*it0).second->_featid <= 4 * state->_options.max_tag_features)
       curr_aruco_tags++;
     it0++;
   }
@@ -469,11 +469,12 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // NOTE: if you do not use FEJ, these types of slam features *degrade* the estimator performance....
   // NOTE: we will also marginalize SLAM features if they have failed their update a couple times in a row
   for (std::pair<const size_t, std::shared_ptr<Landmark>> &landmark : state->_features_SLAM) {
-    if (trackARUCO != nullptr) {
-      std::shared_ptr<Feature> feat1 = trackARUCO->get_feature_database()->get_feature(landmark.second->_featid);
-      if (feat1 != nullptr)
-        feats_slam.push_back(feat1);
-    }
+    // TODO(P6): trackTAG equivalent
+    // if (trackARUCO != nullptr) {
+    //   std::shared_ptr<Feature> feat1 = trackARUCO->get_feature_database()->get_feature(landmark.second->_featid);
+    //   if (feat1 != nullptr)
+    //     feats_slam.push_back(feat1);
+    // }
     std::shared_ptr<Feature> feat2 = trackFEATS->get_feature_database()->get_feature(landmark.second->_featid);
     if (feat2 != nullptr)
       feats_slam.push_back(feat2);
@@ -588,9 +589,10 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // This allows for measurements to be used in the future if they failed to be used this time
   // Note we need to do this before we feed a new image, as we want all new measurements to NOT be deleted
   trackFEATS->get_feature_database()->cleanup();
-  if (trackARUCO != nullptr) {
-    trackARUCO->get_feature_database()->cleanup();
-  }
+  // TODO(P6): trackTAG equivalent
+  // if (trackARUCO != nullptr) {
+  //   trackARUCO->get_feature_database()->cleanup();
+  // }
 
   // First do anchor change if we are about to lose an anchor pose
   updaterSLAM->change_anchors(state);
@@ -598,9 +600,10 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Cleanup any features older than the marginalization time
   if ((int)state->_clones_IMU.size() > state->_options.max_clone_size) {
     trackFEATS->get_feature_database()->cleanup_measurements(state->margtimestep());
-    if (trackARUCO != nullptr) {
-      trackARUCO->get_feature_database()->cleanup_measurements(state->margtimestep());
-    }
+    // TODO(P6): trackTAG equivalent
+    // if (trackARUCO != nullptr) {
+    //   trackARUCO->get_feature_database()->cleanup_measurements(state->margtimestep());
+    // }
   }
 
   // Finally marginalize the oldest clone if needed

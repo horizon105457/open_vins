@@ -37,7 +37,6 @@
 #include "cam/CamRadtan.h"
 #include "feat/Feature.h"
 #include "feat/FeatureDatabase.h"
-#include "track/TrackAruco.h"
 #include "track/TrackDescriptor.h"
 #include "track/TrackKLT.h"
 #include "utils/opencv_yaml_parse.h"
@@ -179,7 +178,6 @@ int main(int argc, char **argv) {
   extractor = new TrackKLT(cameras, num_pts, num_aruco, use_stereo, method, fast_threshold, grid_x, grid_y, min_px_dist);
   // extractor = new TrackDescriptor(cameras, num_pts, num_aruco, use_stereo, method, fast_threshold, grid_x, grid_y, min_px_dist,
   // knn_ratio);
-  // extractor = new TrackAruco(cameras, num_aruco, use_stereo, method, do_downsizing);
 
   //===================================================================================
   //===================================================================================

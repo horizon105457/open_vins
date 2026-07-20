@@ -399,8 +399,8 @@ struct VioManagerOptions {
   /// If we should use KLT tracking, or descriptor matcher
   bool use_klt = true;
 
-  /// If should extract aruco tags and estimate them
-  bool use_aruco = true;
+  /// If should extract AprilTag tags and estimate them
+  bool use_tag = false;
 
   /// Will half the resolution of the aruco tag image (will be faster)
   bool downsize_aruco = true;
@@ -454,7 +454,7 @@ struct VioManagerOptions {
     if (parser != nullptr) {
       parser->parse_config("use_stereo", use_stereo);
       parser->parse_config("use_klt", use_klt);
-      parser->parse_config("use_aruco", use_aruco);
+      parser->parse_config("use_tag", use_tag);
       parser->parse_config("downsize_aruco", downsize_aruco);
       parser->parse_config("downsample_cameras", downsample_cameras);
       parser->parse_config("num_opencv_threads", num_opencv_threads);
@@ -486,7 +486,7 @@ struct VioManagerOptions {
     PRINT_DEBUG("FEATURE TRACKING PARAMETERS:\n");
     PRINT_DEBUG("  - use_stereo: %d\n", use_stereo);
     PRINT_DEBUG("  - use_klt: %d\n", use_klt);
-    PRINT_DEBUG("  - use_aruco: %d\n", use_aruco);
+    PRINT_DEBUG("  - use_tag: %d\n", use_tag);
     PRINT_DEBUG("  - downsize aruco: %d\n", downsize_aruco);
     PRINT_DEBUG("  - downsize cameras: %d\n", downsample_cameras);
     PRINT_DEBUG("  - num opencv threads: %d\n", num_opencv_threads);

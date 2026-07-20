@@ -65,7 +65,7 @@ class FeatureDatabase;
  * mutex for that specific camera id / feed.
  *
  * This base class also handles most of the heavy lifting with the visualization, but the sub-classes can override
- * this and do their own logic if they want (i.e. the TrackAruco has its own logic for visualization).
+ * this and do their own logic if they want.
  * This visualization needs access to the prior images and their tracks, thus must synchronise in the case of multi-threading.
  * This shouldn't impact performance, but high frequency visualization calls can negatively effect the performance.
  */

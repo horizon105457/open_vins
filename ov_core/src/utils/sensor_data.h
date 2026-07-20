@@ -78,6 +78,19 @@ struct CameraData {
   }
 };
 
+/**
+ * @brief Data from a single AprilTag detection
+ */
+struct TagDetection {
+  int id = -1;                         // tag ID (from C library det->id)
+  double timestamp = 0.0;              // image timestamp
+  std::vector<cv::Point2f> corners;    // 4 undistorted corner points
+  double max_edge_px = 0.0;            // max corner-to-corner distance (pixels)
+  int hamming = 0;                     // error-corrected hamming distance (0=perfect)
+  double decision_margin = 0.0;        // decoder confidence (higher=better)
+  size_t cam_id = 0;                   // camera index that produced this detection
+};
+
 } // namespace ov_core
 
 #endif // OV_CORE_SENSOR_DATA_H
