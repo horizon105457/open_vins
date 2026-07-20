@@ -48,7 +48,9 @@ namespace ov_msckf {
 class State;
 class StateHelper;
 class UpdaterMSCKF;
+#if ENABLE_APRILTAG_TAGS
 class UpdaterTag;
+#endif
 class UpdaterSLAM;
 class UpdaterZeroVelocity;
 class Propagator;
@@ -192,6 +194,7 @@ protected:
   /// Our sparse feature tracker (klt or descriptor)
   std::shared_ptr<ov_core::TrackBase> trackFEATS;
 
+#if ENABLE_APRILTAG_TAGS
   /// Our tag tracker (AprilTag)
   std::shared_ptr<ov_core::TrackBase> trackTAG;
 
@@ -200,6 +203,7 @@ protected:
 
   /// Signal to persist tag database on next cycle
   std::atomic<bool> should_save_tags_{false};
+#endif
 
   /// State initializer
   std::shared_ptr<ov_init::InertialInitializer> initializer;

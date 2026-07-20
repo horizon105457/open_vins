@@ -24,7 +24,9 @@
 #include "feat/Feature.h"
 #include "feat/FeatureDatabase.h"
 #include "feat/FeatureInitializer.h"
+#if ENABLE_APRILTAG_TAGS
 #include "track/TrackAprilTag.h"
+#endif
 #include "track/TrackDescriptor.h"
 #include "track/TrackKLT.h"
 #include "track/TrackSIM.h"
@@ -40,7 +42,9 @@
 #include "state/State.h"
 #include "state/StateHelper.h"
 #include "update/UpdaterMSCKF.h"
+#if ENABLE_APRILTAG_TAGS
 #include "update/UpdaterTag.h"
+#endif
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
 
@@ -140,6 +144,7 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
         params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist, params.knn_ratio));
   }
 
+#if ENABLE_APRILTAG_TAGS
   if (params.use_tag) {
     trackTAG = std::make_shared<ov_core::TrackAprilTag>(
         state->_cam_intrinsics_cameras,
@@ -155,6 +160,7 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
 
     updaterTAG = std::make_shared<ov_msckf::UpdaterTag>(state, propagator, tag_opt);
   }
+#endif
 
   // Initialize our state propagator
   propagator = std::make_shared<Propagator>(params.imu_noises, params.gravity_mag);
@@ -291,9 +297,11 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
   // Perform our feature tracking!
   trackFEATS->feed_new_camera(message);
 
+#if ENABLE_APRILTAG_TAGS
   if (params.use_tag && trackTAG != nullptr) {
     trackTAG->feed_new_camera(message);
   }
+#endif
   rT2 = boost::posix_time::microsec_clock::local_time();
 
   // Check if we should do zero-velocity, if so update the state with it
@@ -333,11 +341,13 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
       }
       return;
     }
+#if ENABLE_APRILTAG_TAGS
     if (params.use_tag) {
       int idx = state->_imu->id();
       state->Cov().block(idx + 3, idx + 3, 3, 3) = params.init_cov_pos * Eigen::Matrix3d::Identity();
       state->Cov()(idx + 2, idx + 2) = params.init_cov_yaw;
     }
+#endif
   }
 
   // Call on our propagate and update function
@@ -395,9 +405,11 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Don't need to get the oldest features until we reach our max number of clones
   if ((int)state->_clones_IMU.size() > state->_options.max_clone_size || (int)state->_clones_IMU.size() > 5) {
     feats_marg = trackFEATS->get_feature_database()->features_containing(state->margtimestep(), false, true);
+#if ENABLE_APRILTAG_TAGS
     if (trackTAG != nullptr && message.timestamp - startup_time >= params.dt_slam_delay) {
       feats_slam = trackTAG->get_feature_database()->features_containing(state->margtimestep(), false, true);
     }
+#endif
   }
 
   // Remove any lost features that were from other image streams
@@ -481,11 +493,13 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // NOTE: if you do not use FEJ, these types of slam features *degrade* the estimator performance....
   // NOTE: we will also marginalize SLAM features if they have failed their update a couple times in a row
   for (std::pair<const size_t, std::shared_ptr<Landmark>> &landmark : state->_features_SLAM) {
+#if ENABLE_APRILTAG_TAGS
     if (trackTAG != nullptr) {
       std::shared_ptr<Feature> feat1 = trackTAG->get_feature_database()->get_feature(landmark.second->_featid);
       if (feat1 != nullptr)
         feats_slam.push_back(feat1);
     }
+#endif
     std::shared_ptr<Feature> feat2 = trackFEATS->get_feature_database()->get_feature(landmark.second->_featid);
     if (feat2 != nullptr)
       feats_slam.push_back(feat2);
@@ -549,6 +563,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   propagator->invalidate_cache();
   rT4 = boost::posix_time::microsec_clock::local_time();
 
+#if ENABLE_APRILTAG_TAGS
   if (params.use_tag && updaterTAG != nullptr && trackTAG != nullptr) {
     auto track_tag = std::dynamic_pointer_cast<ov_core::TrackAprilTag>(trackTAG);
     if (track_tag != nullptr) {
@@ -558,6 +573,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
       }
     }
   }
+#endif
 
   // Perform SLAM delay init and update
   // NOTE: that we provide the option here to do a *sequential* update
@@ -610,9 +626,11 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // This allows for measurements to be used in the future if they failed to be used this time
   // Note we need to do this before we feed a new image, as we want all new measurements to NOT be deleted
   trackFEATS->get_feature_database()->cleanup();
+#if ENABLE_APRILTAG_TAGS
   if (trackTAG != nullptr) {
     trackTAG->get_feature_database()->cleanup();
   }
+#endif
 
   // First do anchor change if we are about to lose an anchor pose
   updaterSLAM->change_anchors(state);
@@ -620,9 +638,11 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Cleanup any features older than the marginalization time
   if ((int)state->_clones_IMU.size() > state->_options.max_clone_size) {
     trackFEATS->get_feature_database()->cleanup_measurements(state->margtimestep());
+#if ENABLE_APRILTAG_TAGS
     if (trackTAG != nullptr) {
       trackTAG->get_feature_database()->cleanup_measurements(state->margtimestep());
     }
+#endif
   }
 
   // Finally marginalize the oldest clone if needed

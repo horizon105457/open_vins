@@ -59,9 +59,11 @@ void VioManager::initialize_with_gt(Eigen::Matrix<double, 17, 1> imustate) {
 
   // Cleanup any features older then the initialization time
   trackFEATS->get_feature_database()->cleanup_measurements(state->_timestamp);
+#if ENABLE_APRILTAG_TAGS
   if (trackTAG != nullptr) {
     trackTAG->get_feature_database()->cleanup_measurements(state->_timestamp);
   }
+#endif
 
   // Print what we init'ed with
   PRINT_DEBUG(GREEN "[INIT]: INITIALIZED FROM GROUNDTRUTH FILE!!!!!\n" RESET);
@@ -122,9 +124,11 @@ bool VioManager::try_to_initialize(const ov_core::CameraData &message) {
       // NOTE: we will split the total number of features over all cameras uniformly
       trackFEATS->get_feature_database()->cleanup_measurements(state->_timestamp);
       trackFEATS->set_num_features(std::floor((double)params.num_pts / (double)params.state_options.num_cameras));
+#if ENABLE_APRILTAG_TAGS
       if (trackTAG != nullptr) {
         trackTAG->get_feature_database()->cleanup_measurements(state->_timestamp);
       }
+#endif
 
       // If we are moving then don't do zero velocity update4
       if (state->_imu->vel().norm() > params.zupt_max_velocity) {
@@ -405,9 +409,11 @@ cv::Mat VioManager::get_historical_viz_image() {
   // Get the current active tracks
   cv::Mat img_history;
   trackFEATS->display_history(img_history, 255, 255, 0, 255, 255, 255, highlighted_ids, overlay);
+#if ENABLE_APRILTAG_TAGS
   if (trackTAG != nullptr) {
     trackTAG->display_history(img_history, 0, 255, 255, 255, 255, 255, highlighted_ids, overlay);
   }
+#endif
 
   // Finally return the image
   return img_history;
