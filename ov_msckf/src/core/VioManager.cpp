@@ -312,6 +312,17 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
     if (!is_initialized_vio) {
       double time_track = (rT2 - rT1).total_microseconds() * 1e-6;
       PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for tracking\n" RESET, time_track);
+      // Prevent unbounded FeatureDatabase growth during long initialization.
+      // Without periodic cleanup, every frame adds ~init_max_features new
+      // features that accumulate indefinitely until OOM. We retain a sliding
+      // window of 2× init_window_time for sufficient track history while
+      // bounding memory to ~3,000 features (≈ 1.5 MB with default params).
+      double cleanup_time = message.timestamp - params.init_options.init_window_time * 2;
+      if (cleanup_time > 0) {
+        trackFEATS->get_feature_database()->cleanup_measurements(cleanup_time);
+        if (trackARUCO != nullptr)
+          trackARUCO->get_feature_database()->cleanup_measurements(cleanup_time);
+      }
       return;
     }
   }

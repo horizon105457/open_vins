@@ -31,12 +31,14 @@
 #include "utils/print.h"
 #include "utils/sensor_data.h"
 
+#include <rmw/qos_profiles.h>
+
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
 
 ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_ptr<VioManager> app, std::shared_ptr<Simulator> sim)
-    : _node(node), _app(app), _sim(sim), thread_update_running(false) {
+    : _node(node), _app(app), _sim(sim) {
 
   // Setup our transform broadcaster
   mTfBr = std::make_shared<tf2_ros::TransformBroadcaster>(node);
@@ -158,6 +160,14 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
     });
     thread.detach();
   }
+
+  // Pre-allocate camera channels: one ring buffer per logical camera stream.
+  // Stereo (num_cameras==2) shares a single channel since message_filters
+  // already pairs left+right frames into one callback.
+  int num_channels = (_app->get_params().state_options.num_cameras == 2)
+                         ? 1
+                         : _app->get_params().state_options.num_cameras;
+  camera_channels_.resize(num_channels);
 }
 
 void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> parser) {
@@ -170,7 +180,9 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
   _node->declare_parameter<std::string>("topic_imu", "/imu0");
   _node->get_parameter("topic_imu", topic_imu);
   parser->parse_external("relative_config_imu", "imu0", "rostopic", topic_imu);
-  sub_imu = _node->create_subscription<sensor_msgs::msg::Imu>(topic_imu, rclcpp::SensorDataQoS(),
+  auto qos_imu = rclcpp::SensorDataQoS();
+  qos_imu.keep_last(64);  // deeper queue to cover camera-frame processing stalls
+  sub_imu = _node->create_subscription<sensor_msgs::msg::Imu>(topic_imu, qos_imu,
                                                               std::bind(&ROS2Visualizer::callback_inertial, this, std::placeholders::_1));
   PRINT_INFO("subscribing to IMU: %s\n", topic_imu.c_str());
 
@@ -186,8 +198,10 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
     parser->parse_external("relative_config_imucam", "cam" + std::to_string(0), "rostopic", cam_topic0);
     parser->parse_external("relative_config_imucam", "cam" + std::to_string(1), "rostopic", cam_topic1);
     // Create sync filter (they have unique pointers internally, so we have to use move logic here...)
-    auto image_sub0 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic0);
-    auto image_sub1 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic1);
+    auto image_sub0 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic0,
+                                                                                           rmw_qos_profile_sensor_data);
+    auto image_sub1 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic1,
+                                                                                           rmw_qos_profile_sensor_data);
     auto sync = std::make_shared<message_filters::Synchronizer<sync_pol>>(sync_pol(10), *image_sub0, *image_sub1);
     sync->registerCallback(std::bind(&ROS2Visualizer::callback_stereo, this, std::placeholders::_1, std::placeholders::_2, 0, 1));
     // sync->registerCallback([](const sensor_msgs::msg::Image::SharedPtr msg0, const sensor_msgs::msg::Image::SharedPtr msg1)
@@ -208,10 +222,9 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
       _node->get_parameter("topic_camera" + std::to_string(i), cam_topic);
       parser->parse_external("relative_config_imucam", "cam" + std::to_string(i), "rostopic", cam_topic);
       // create subscriber
-      // auto sub = _node->create_subscription<sensor_msgs::msg::Image>(
-      //    cam_topic, rclcpp::SensorDataQoS(), std::bind(&ROS2Visualizer::callback_monocular, this, std::placeholders::_1, i));
+      auto qos_cam = rclcpp::SensorDataQoS();
       auto sub = _node->create_subscription<sensor_msgs::msg::Image>(
-          cam_topic, 10, [this, i](const sensor_msgs::msg::Image::SharedPtr msg0) { callback_monocular(msg0, i); });
+          cam_topic, qos_cam, [this, i](const sensor_msgs::msg::Image::SharedPtr msg0) { callback_monocular(msg0, i); });
       subs_cam.push_back(sub);
       PRINT_INFO("subscribing to cam (mono): %s\n", cam_topic.c_str());
     }
@@ -447,63 +460,69 @@ void ROS2Visualizer::callback_inertial(const sensor_msgs::msg::Imu::SharedPtr ms
   _app->feed_measurement_imu(message);
   visualize_odometry(message.timestamp);
 
-  // If the processing queue is currently active / running just return so we can keep getting measurements
-  // Otherwise create a second thread to do our update in an async manor
-  // The visualization of the state, images, and features will be synchronous with the update!
-  if (thread_update_running)
-    return;
-  thread_update_running = true;
-  std::thread thread([&] {
-    // Lock on the queue (prevents new images from appending)
-    std::lock_guard<std::mutex> lck(camera_queue_mtx);
+  // Drain camera frames whose timestamps are behind the current IMU time.
+  // Each channel's ring buffer is consumed independently; read_conditional
+  // atomically peeks at the oldest frame and pops it only when the timestamp
+  // condition is met.
+  double timestamp_imu_inC = message.timestamp - _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
+  static constexpr double MAX_CAMERA_DELAY = 1.0; // drop frames >1s behind IMU
 
-    // Count how many unique image streams
-    std::map<int, bool> unique_cam_ids;
-    for (const auto &cam_msg : camera_queue) {
-      unique_cam_ids[cam_msg.sensor_ids.at(0)] = true;
-    }
-
-    // If we do not have enough unique cameras then we need to wait
-    // We should wait till we have one of each camera to ensure we propagate in the correct order
-    auto params = _app->get_params();
-    size_t num_unique_cameras = (params.state_options.num_cameras == 2) ? 1 : params.state_options.num_cameras;
-    if (unique_cam_ids.size() == num_unique_cameras) {
-
-      // Loop through our queue and see if we are able to process any of our camera measurements
-      // We are able to process if we have at least one IMU measurement greater than the camera time
-      double timestamp_imu_inC = message.timestamp - _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
-      while (!camera_queue.empty() && camera_queue.at(0).timestamp < timestamp_imu_inC) {
-        auto rT0_1 = boost::posix_time::microsec_clock::local_time();
-        double update_dt = 100.0 * (timestamp_imu_inC - camera_queue.at(0).timestamp);
-        _app->feed_measurement_camera(camera_queue.at(0));
+  for (auto &ch : camera_channels_) {
+    // Keep draining while the oldest frame is ready for processing.
+    while (ch.ring.consume_one([&](const CameraSlot &slot) {
+      // Drop frames that are too far behind (expired).
+      if (slot.timestamp < timestamp_imu_inC - MAX_CAMERA_DELAY)
+        return true; // pop & discard
+      // Process frames whose timestamp is behind the IMU.
+      if (slot.timestamp < timestamp_imu_inC) {
+        ov_core::CameraData camera_msg;
+        camera_msg.timestamp = slot.timestamp;
+        camera_msg.sensor_ids = slot.sensor_ids;
+        camera_msg.images = slot.images; // cv::Mat ref-counted, zero-copy
+        camera_msg.masks = slot.masks;
+        _app->feed_measurement_camera(camera_msg);
         visualize();
-        camera_queue.pop_front();
-        auto rT0_2 = boost::posix_time::microsec_clock::local_time();
-        double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
-        PRINT_INFO(BLUE "[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n" RESET, time_total, 1.0 / time_total, update_dt);
+        return true; // pop after processing
       }
+      return false; // keep in ring for a future IMU
+    })) {
+      // drained one frame; loop continues
     }
-    thread_update_running = false;
-  });
-
-  // If we are single threaded, then run single threaded
-  // Otherwise detach this thread so it runs in the background!
-  if (!_app->get_params().use_multi_threading_subs) {
-    thread.join();
-  } else {
-    thread.detach();
   }
 }
 
 void ROS2Visualizer::callback_monocular(const sensor_msgs::msg::Image::SharedPtr msg0, int cam_id0) {
 
-  // Check if we should drop this image
+  // --- time guards ---
   double timestamp = msg0->header.stamp.sec + msg0->header.stamp.nanosec * 1e-9;
+
+  // Reject implausibly far-future timestamps (injection / clock skew).
+  double now_sec = _node->now().seconds();
+  static constexpr double MAX_FUTURE_DRIFT = 2.0;
+  if (timestamp > now_sec + MAX_FUTURE_DRIFT) {
+    PRINT_WARNING(YELLOW "[CAM]: future timestamp rejected (ts=%.3f, now=%.3f)\n" RESET, timestamp, now_sec);
+    return;
+  }
+
+  // Rate-limit to track_frequency.
   double time_delta = 1.0 / _app->get_params().track_frequency;
-  if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() && timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
+  if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() &&
+      timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
     return;
   }
   camera_last_timestamp[cam_id0] = timestamp;
+
+  // Determine channel index.
+  // Stereo (num_cameras==2) shares channel 0; otherwise each camera maps 1:1.
+  int ch_id = (_app->get_params().state_options.num_cameras == 2) ? 0 : cam_id0;
+  if (ch_id >= (int)camera_channels_.size())
+    return;
+  auto &ch = camera_channels_[ch_id];
+
+  // Monotonicity: reject out-of-order or duplicate timestamps.
+  if (ch.last_written_ts > 0.0 && timestamp <= ch.last_written_ts) {
+    return;
+  }
 
   // Get the image
   cv_bridge::CvImageConstPtr cv_ptr;
@@ -514,78 +533,117 @@ void ROS2Visualizer::callback_monocular(const sensor_msgs::msg::Image::SharedPtr
     return;
   }
 
-  // Create the measurement
-  ov_core::CameraData message;
-  message.timestamp = cv_ptr->header.stamp.sec + cv_ptr->header.stamp.nanosec * 1e-9;
-  message.sensor_ids.push_back(cam_id0);
-  message.images.push_back(cv_ptr->image.clone());
+  // Write into ring buffer via in-place emplace (lock-free, pre-allocated slot).
+  // Overwrites oldest frame when full (KEEP_LAST).
+  ch.ring.emplace_write([&](CameraSlot &slot) {
+    if (slot.images.empty())
+      slot.images.resize(1);
+    if (slot.images[0].rows != cv_ptr->image.rows || slot.images[0].cols != cv_ptr->image.cols)
+      slot.images[0].create(cv_ptr->image.rows, cv_ptr->image.cols, CV_8UC1);
+    cv_ptr->image.copyTo(slot.images[0]);
 
-  // Load the mask if we are using it, else it is empty
-  // TODO: in the future we should get this from external pixel segmentation
-  if (_app->get_params().use_mask) {
-    message.masks.push_back(_app->get_params().masks.at(cam_id0));
-  } else {
-    message.masks.push_back(cv::Mat::zeros(cv_ptr->image.rows, cv_ptr->image.cols, CV_8UC1));
-  }
+    if (slot.masks.empty())
+      slot.masks.resize(1);
+    if (slot.masks[0].rows != cv_ptr->image.rows || slot.masks[0].cols != cv_ptr->image.cols)
+      slot.masks[0].create(cv_ptr->image.rows, cv_ptr->image.cols, CV_8UC1);
+    if (_app->get_params().use_mask && cam_id0 < (int)_app->get_params().masks.size()) {
+      cv::Mat &m = _app->get_params().masks.at(cam_id0);
+      if (m.rows == cv_ptr->image.rows && m.cols == cv_ptr->image.cols)
+        m.copyTo(slot.masks[0]);
+      else
+        slot.masks[0].setTo(0);
+    } else {
+      slot.masks[0].setTo(0);
+    }
 
-  // append it to our queue of images
-  std::lock_guard<std::mutex> lck(camera_queue_mtx);
-  camera_queue.push_back(message);
-  std::sort(camera_queue.begin(), camera_queue.end());
+    slot.timestamp = timestamp;
+    slot.sensor_ids = {cam_id0};
+  });
+
+  ch.last_written_ts = timestamp;
 }
 
 void ROS2Visualizer::callback_stereo(const sensor_msgs::msg::Image::ConstSharedPtr msg0, const sensor_msgs::msg::Image::ConstSharedPtr msg1,
                                      int cam_id0, int cam_id1) {
 
-  // Check if we should drop this image
+  // --- time guards ---
   double timestamp = msg0->header.stamp.sec + msg0->header.stamp.nanosec * 1e-9;
+
+  // Reject implausibly far-future timestamps.
+  double now_sec = _node->now().seconds();
+  static constexpr double MAX_FUTURE_DRIFT = 2.0;
+  if (timestamp > now_sec + MAX_FUTURE_DRIFT) {
+    PRINT_WARNING(YELLOW "[CAM]: future timestamp rejected (ts=%.3f, now=%.3f)\n" RESET, timestamp, now_sec);
+    return;
+  }
+
+  // Rate-limit to track_frequency.
   double time_delta = 1.0 / _app->get_params().track_frequency;
-  if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() && timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
+  if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() &&
+      timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
     return;
   }
   camera_last_timestamp[cam_id0] = timestamp;
 
-  // Get the image
-  cv_bridge::CvImageConstPtr cv_ptr0;
-  try {
-    cv_ptr0 = cv_bridge::toCvShare(msg0, sensor_msgs::image_encodings::MONO8);
-  } catch (cv_bridge::Exception &e) {
-    PRINT_ERROR("cv_bridge exception: %s", e.what());
+  // Stereo shares channel 0.
+  if (camera_channels_.empty())
+    return;
+  auto &ch = camera_channels_[0];
+
+  // Monotonicity.
+  if (ch.last_written_ts > 0.0 && timestamp <= ch.last_written_ts) {
     return;
   }
 
-  // Get the image
-  cv_bridge::CvImageConstPtr cv_ptr1;
+  // Get the images
+  cv_bridge::CvImageConstPtr cv_ptr0, cv_ptr1;
   try {
+    cv_ptr0 = cv_bridge::toCvShare(msg0, sensor_msgs::image_encodings::MONO8);
     cv_ptr1 = cv_bridge::toCvShare(msg1, sensor_msgs::image_encodings::MONO8);
   } catch (cv_bridge::Exception &e) {
     PRINT_ERROR("cv_bridge exception: %s", e.what());
     return;
   }
 
-  // Create the measurement
-  ov_core::CameraData message;
-  message.timestamp = cv_ptr0->header.stamp.sec + cv_ptr0->header.stamp.nanosec * 1e-9;
-  message.sensor_ids.push_back(cam_id0);
-  message.sensor_ids.push_back(cam_id1);
-  message.images.push_back(cv_ptr0->image.clone());
-  message.images.push_back(cv_ptr1->image.clone());
+  // Write into ring buffer via in-place emplace (lock-free, pre-allocated slots).
+  // Overwrites oldest frame when full (KEEP_LAST).
+  ch.ring.emplace_write([&](CameraSlot &slot) {
+    if (slot.images.size() < 2)
+      slot.images.resize(2);
+    if (slot.images[0].rows != cv_ptr0->image.rows || slot.images[0].cols != cv_ptr0->image.cols) {
+      slot.images[0].create(cv_ptr0->image.rows, cv_ptr0->image.cols, CV_8UC1);
+      slot.images[1].create(cv_ptr1->image.rows, cv_ptr1->image.cols, CV_8UC1);
+    }
+    cv_ptr0->image.copyTo(slot.images[0]);
+    cv_ptr1->image.copyTo(slot.images[1]);
 
-  // Load the mask if we are using it, else it is empty
-  // TODO: in the future we should get this from external pixel segmentation
-  if (_app->get_params().use_mask) {
-    message.masks.push_back(_app->get_params().masks.at(cam_id0));
-    message.masks.push_back(_app->get_params().masks.at(cam_id1));
-  } else {
-    // message.masks.push_back(cv::Mat(cv_ptr0->image.rows, cv_ptr0->image.cols, CV_8UC1, cv::Scalar(255)));
-    message.masks.push_back(cv::Mat::zeros(cv_ptr0->image.rows, cv_ptr0->image.cols, CV_8UC1));
-    message.masks.push_back(cv::Mat::zeros(cv_ptr1->image.rows, cv_ptr1->image.cols, CV_8UC1));
-  }
+    if (slot.masks.size() < 2)
+      slot.masks.resize(2);
+    if (slot.masks[0].rows != cv_ptr0->image.rows || slot.masks[0].cols != cv_ptr0->image.cols) {
+      slot.masks[0].create(cv_ptr0->image.rows, cv_ptr0->image.cols, CV_8UC1);
+      slot.masks[1].create(cv_ptr1->image.rows, cv_ptr1->image.cols, CV_8UC1);
+    }
+    if (_app->get_params().use_mask) {
+      cv::Mat &m0 = _app->get_params().masks.at(cam_id0);
+      cv::Mat &m1 = _app->get_params().masks.at(cam_id1);
+      if (m0.rows == cv_ptr0->image.rows && m0.cols == cv_ptr0->image.cols)
+        m0.copyTo(slot.masks[0]);
+      else
+        slot.masks[0].setTo(0);
+      if (m1.rows == cv_ptr1->image.rows && m1.cols == cv_ptr1->image.cols)
+        m1.copyTo(slot.masks[1]);
+      else
+        slot.masks[1].setTo(0);
+    } else {
+      slot.masks[0].setTo(0);
+      slot.masks[1].setTo(0);
+    }
 
-  // append it to our queue of images
-  std::lock_guard<std::mutex> lck(camera_queue_mtx);
-  camera_queue.push_back(message);
-  std::sort(camera_queue.begin(), camera_queue.end());
+    slot.timestamp = timestamp;
+    slot.sensor_ids = {cam_id0, cam_id1};
+  });
+
+  ch.last_written_ts = timestamp;
 }
 
 void ROS2Visualizer::publish_state() {

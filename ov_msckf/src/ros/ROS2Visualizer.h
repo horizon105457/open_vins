@@ -55,6 +55,8 @@
 #include <boost/filesystem.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 
+#include "ros/RingBuffer.h"
+
 namespace ov_core {
 class YamlParser;
 struct CameraData;
@@ -178,15 +180,24 @@ protected:
   bool start_time_set = false;
   boost::posix_time::ptime rT1, rT2;
 
-  // Thread atomics
-  std::atomic<bool> thread_update_running;
+  /// Slot stored in the per-camera ring buffers.
+  /// cv::Mat buffers are pre-allocated once and reused via copyTo(),
+  /// eliminating per-frame heap allocation.
+  struct CameraSlot {
+    double timestamp = -1.0;
+    std::vector<int> sensor_ids;
+    std::vector<cv::Mat> images; // one per sensor (1 for mono, 2 for stereo)
+    std::vector<cv::Mat> masks;
+  };
 
-  /// Queue up camera measurements sorted by time and trigger once we have
-  /// exactly one IMU measurement with timestamp newer than the camera measurement
-  /// This also handles out-of-order camera measurements, which is rare, but
-  /// a nice feature to have for general robustness to bad camera drivers.
-  std::deque<ov_core::CameraData> camera_queue;
-  std::mutex camera_queue_mtx;
+  /// One ring buffer per logical camera stream, providing bounded,
+  /// pre-allocated storage with automatic overwrite of oldest frames.
+  static constexpr size_t CAMERA_RING_CAPACITY = 8;
+  struct CameraChannel {
+    RingBuffer<CameraSlot, CAMERA_RING_CAPACITY> ring;
+    double last_written_ts = -1.0; // monotonicity guard (writer-only)
+  };
+  std::vector<CameraChannel> camera_channels_;
 
   // Last camera message timestamps we have received (mapped by cam id)
   std::map<int, double> camera_last_timestamp;
