@@ -460,35 +460,37 @@ void ROS2Visualizer::callback_inertial(const sensor_msgs::msg::Imu::SharedPtr ms
   _app->feed_measurement_imu(message);
   visualize_odometry(message.timestamp);
 
-  // Drain camera frames whose timestamps are behind the current IMU time.
-  // Each channel's ring buffer is consumed independently; read_conditional
-  // atomically peeks at the oldest frame and pops it only when the timestamp
-  // condition is met.
-  double timestamp_imu_inC = message.timestamp - _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
-  static constexpr double MAX_CAMERA_DELAY = 1.0; // drop frames >1s behind IMU
+  // Asynchronously drain camera frames.  IMU feeding must never block on
+  // camera processing (feature tracking + init can take 10–100 ms); a
+  // detached thread runs the drain while subsequent IMU callbacks continue
+  // to feed the propagator and initialiser without interruption.
+  bool expected = false;
+  if (!camera_drain_running_.compare_exchange_strong(expected, true))
+    return;
 
-  for (auto &ch : camera_channels_) {
-    // Keep draining while the oldest frame is ready for processing.
-    while (ch.ring.consume_one([&](const CameraSlot &slot) {
-      // Drop frames that are too far behind (expired).
-      if (slot.timestamp < timestamp_imu_inC - MAX_CAMERA_DELAY)
-        return true; // pop & discard
-      // Process frames whose timestamp is behind the IMU.
-      if (slot.timestamp < timestamp_imu_inC) {
-        ov_core::CameraData camera_msg;
-        camera_msg.timestamp = slot.timestamp;
-        camera_msg.sensor_ids = slot.sensor_ids;
-        camera_msg.images = slot.images; // cv::Mat ref-counted, zero-copy
-        camera_msg.masks = slot.masks;
-        _app->feed_measurement_camera(camera_msg);
-        visualize();
-        return true; // pop after processing
-      }
-      return false; // keep in ring for a future IMU
-    })) {
-      // drained one frame; loop continues
+  double timestamp_imu_inC = message.timestamp - _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
+  static constexpr double MAX_CAMERA_DELAY = 1.0;
+
+  std::thread([this, timestamp_imu_inC] {
+    for (auto &ch : camera_channels_) {
+      while (ch.ring.consume_one([&](const CameraSlot &slot) {
+        if (slot.timestamp < timestamp_imu_inC - MAX_CAMERA_DELAY)
+          return true; // drop expired
+        if (slot.timestamp < timestamp_imu_inC) {
+          ov_core::CameraData camera_msg;
+          camera_msg.timestamp = slot.timestamp;
+          camera_msg.sensor_ids = slot.sensor_ids;
+          camera_msg.images = slot.images;
+          camera_msg.masks = slot.masks;
+          _app->feed_measurement_camera(camera_msg);
+          visualize();
+          return true;
+        }
+        return false;
+      })) {}
     }
-  }
+    camera_drain_running_.store(false, std::memory_order_release);
+  }).detach();
 }
 
 void ROS2Visualizer::callback_monocular(const sensor_msgs::msg::Image::SharedPtr msg0, int cam_id0) {

@@ -199,6 +199,9 @@ protected:
   };
   std::vector<CameraChannel> camera_channels_;
 
+  /// Guards against concurrent camera drain (one detached thread at a time).
+  std::atomic<bool> camera_drain_running_{false};
+
   // Last camera message timestamps we have received (mapped by cam id)
   std::map<int, double> camera_last_timestamp;
 
