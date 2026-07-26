@@ -336,8 +336,10 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
       double cleanup_time = message.timestamp - params.init_options.init_window_time * 2;
       if (cleanup_time > 0) {
         trackFEATS->get_feature_database()->cleanup_measurements(cleanup_time);
-        if (trackARUCO != nullptr)
-          trackARUCO->get_feature_database()->cleanup_measurements(cleanup_time);
+#if ENABLE_APRILTAG_TAGS
+        if (trackTAG != nullptr)
+          trackTAG->get_feature_database()->cleanup_measurements(cleanup_time);
+#endif
       }
       return;
     }
