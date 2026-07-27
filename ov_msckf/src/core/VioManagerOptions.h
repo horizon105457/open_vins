@@ -153,9 +153,6 @@ struct VioManagerOptions {
   /// Update options for SLAM features (pixel noise and chi2 multiplier)
   UpdaterOptions slam_options;
 
-  /// Update options for ARUCO features (pixel noise and chi2 multiplier)
-  UpdaterOptions aruco_options;
-
   /// Update options for zero velocity (chi2 multiplier)
   UpdaterOptions zupt_options;
 
@@ -179,19 +176,14 @@ struct VioManagerOptions {
       parser->parse_config("up_msckf_chi2_multipler", msckf_options.chi2_multipler);
       parser->parse_config("up_slam_sigma_px", slam_options.sigma_pix);
       parser->parse_config("up_slam_chi2_multipler", slam_options.chi2_multipler);
-      parser->parse_config("up_aruco_sigma_px", aruco_options.sigma_pix);
-      parser->parse_config("up_aruco_chi2_multipler", aruco_options.chi2_multipler);
       msckf_options.sigma_pix_sq = std::pow(msckf_options.sigma_pix, 2);
       slam_options.sigma_pix_sq = std::pow(slam_options.sigma_pix, 2);
-      aruco_options.sigma_pix_sq = std::pow(aruco_options.sigma_pix, 2);
       parser->parse_config("zupt_chi2_multipler", zupt_options.chi2_multipler);
     }
     PRINT_DEBUG("  Updater MSCKF Feats:\n");
     msckf_options.print();
     PRINT_DEBUG("  Updater SLAM Feats:\n");
     slam_options.print();
-    PRINT_DEBUG("  Updater ARUCO Tags:\n");
-    aruco_options.print();
     PRINT_DEBUG("  Updater ZUPT:\n");
     zupt_options.print();
   }
@@ -412,16 +404,13 @@ struct VioManagerOptions {
   bool use_klt = true;
 
   /// If should extract AprilTag tags and estimate them
-  bool use_tag = false;
+  bool use_tag = true;
 
   // Tag detection parameters
-  double init_cov_pos = 0.0025;          // position init variance (m²); default = 0.05²
-  double init_cov_yaw = 0.0004;          // yaw init variance (rad²); default = 0.02²
   double tag_pos_publish_threshold = 0.01;
   std::string tag_family = "36h11";
   double tag_size = 0.165;
   std::string tag_config_path;
-  double max_detection_hz = 15.0;
   double tag_info_accum_weight = 1.0;
 
   // Two-tier filtering thresholds
@@ -433,9 +422,6 @@ struct VioManagerOptions {
 
   // Tag database
   std::map<int, TagEntry> tags;
-
-  /// Will half the resolution of the aruco tag image (will be faster)
-  bool downsize_aruco = true;
 
   /// Will half the resolution all tracking image (aruco will be 1/4 instead of halved if dowsize_aruoc also enabled)
   bool downsample_cameras = false;
@@ -487,13 +473,10 @@ struct VioManagerOptions {
       parser->parse_config("use_stereo", use_stereo);
       parser->parse_config("use_klt", use_klt);
       parser->parse_config("use_tag", use_tag);
-      parser->parse_config("init_cov_pos", init_cov_pos);
-      parser->parse_config("init_cov_yaw", init_cov_yaw);
       parser->parse_config("tag_pos_publish_threshold", tag_pos_publish_threshold);
       parser->parse_config("tag_family", tag_family);
       parser->parse_config("tag_size", tag_size);
       parser->parse_config("tag_config", tag_config_path);
-      parser->parse_config("max_detection_hz", max_detection_hz);
       parser->parse_config("tag_info_accum_weight", tag_info_accum_weight);
       parser->parse_config("up_tag_sigma_pix", up_tag_sigma_pix);
       parser->parse_config("up_tag_chi2_multipler", up_tag_chi2_multipler);
@@ -523,8 +506,13 @@ struct VioManagerOptions {
                 entry.info(d) = (rot_sig[d] > 0) ? 1.0 / (rot_sig[d] * rot_sig[d]) : 0.0;
               for (int d = 0; d < 3 && d < (int)pos_sig.size(); d++)
                 entry.info(3 + d) = (pos_sig[d] > 0) ? 1.0 / (pos_sig[d] * pos_sig[d]) : 0.0;
-              entry.size = tag_size;
               entry.R_tag2world = ov_core::quat_2_Rot(entry.pose.tail<4>()).transpose();
+
+              // Tag size: per-entry override falls back to global config default
+              double sz = tag_size;
+              tag_node["size"] >> sz;
+              entry.size = sz;
+
               tags[id] = entry;
             }
           }
@@ -532,7 +520,6 @@ struct VioManagerOptions {
         }
       }
 
-      parser->parse_config("downsize_aruco", downsize_aruco);
       parser->parse_config("downsample_cameras", downsample_cameras);
       parser->parse_config("num_opencv_threads", num_opencv_threads);
       parser->parse_config("multi_threading_pubs", use_multi_threading_pubs, false);
@@ -564,12 +551,9 @@ struct VioManagerOptions {
     PRINT_DEBUG("  - use_stereo: %d\n", use_stereo);
     PRINT_DEBUG("  - use_klt: %d\n", use_klt);
     PRINT_DEBUG("  - use_tag: %d\n", use_tag);
-    PRINT_DEBUG("  - init_cov_pos: %.4f\n", init_cov_pos);
-    PRINT_DEBUG("  - init_cov_yaw: %.4f\n", init_cov_yaw);
     PRINT_DEBUG("  - tag_family: %s\n", tag_family.c_str());
     PRINT_DEBUG("  - tag_size: %.3f\n", tag_size);
     PRINT_DEBUG("  - tag_config: %s\n", tag_config_path.c_str());
-    PRINT_DEBUG("  - downsize aruco: %d\n", downsize_aruco);
     PRINT_DEBUG("  - downsize cameras: %d\n", downsample_cameras);
     PRINT_DEBUG("  - num opencv threads: %d\n", num_opencv_threads);
     PRINT_DEBUG("  - use multi-threading pubs: %d\n", use_multi_threading_pubs);

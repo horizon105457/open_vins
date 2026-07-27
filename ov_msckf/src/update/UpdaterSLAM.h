@@ -60,7 +60,7 @@ public:
    * @param options_aruco Updater options (include measurement noise value) for ARUCO features
    * @param feat_init_options Feature initializer options
    */
-  UpdaterSLAM(UpdaterOptions &options_slam, UpdaterOptions &options_aruco, ov_core::FeatureInitializerOptions &feat_init_options);
+  UpdaterSLAM(UpdaterOptions &options_slam, ov_core::FeatureInitializerOptions &feat_init_options);
 
   /**
    * @brief Given tracked SLAM features, this will try to use them to update the state.
@@ -99,9 +99,6 @@ protected:
 
   /// Options used during update for slam features
   UpdaterOptions _options_slam;
-
-  /// Options used during update for tag features
-  UpdaterOptions _options_tag;
 
   /// Feature initializer class object
   std::shared_ptr<ov_core::FeatureInitializer> initializer_feat;

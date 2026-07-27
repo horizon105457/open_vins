@@ -634,7 +634,7 @@ void StateHelper::marginalize_slam(std::shared_ptr<State> state) {
   int ct_marginalized = 0;
   auto it0 = state->_features_SLAM.begin();
   while (it0 != state->_features_SLAM.end()) {
-    if ((*it0).second->should_marg && !state->_options.is_tag_feature((int)(*it0).first)) {
+    if ((*it0).second->should_marg) {
       StateHelper::marginalize(state, (*it0).second);
       it0 = state->_features_SLAM.erase(it0);
       ct_marginalized++;

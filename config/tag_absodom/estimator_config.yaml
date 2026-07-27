@@ -2,13 +2,10 @@
 
 # tag-absodom example config — AprilTag-based absolute odometry
 use_tag: true
-init_cov_pos: 100.0
-init_cov_yaw: 10.0
 tag_pos_publish_threshold: 0.01
 tag_family: "36h11"
 tag_size: 0.2
 tag_config: "tag_config.yaml"
-max_detection_hz: 15.0
 tag_info_accum_weight: 1.0
 
 # Two-tier filtering thresholds
@@ -16,9 +13,7 @@ tag_min_edge_px: 20
 tag_max_hamming: 2
 tag_min_decision_margin: 0.5
 
-# Feature system overrides
-max_tag_features: 4096
-feat_rep_tag: "ANCHORED_MSCKF_INVERSE_DEPTH"
+# PnP noise / chi2
 up_tag_sigma_pix: 1.0
 up_tag_chi2_multipler: 1.0
 

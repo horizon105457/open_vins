@@ -49,12 +49,10 @@ public:
    * @brief Public constructor with configuration variables
    * @param cameras camera calibration object which has all camera intrinsics in it
    * @param max_tag_features stride for featurd ID encoding (tag_id + n * max_tag_features)
-   * @param tag_size physical size of the tag in meters
    * @param tag_family AprilTag family name (e.g. "36h11", "25h9", "16h5")
    */
   explicit TrackAprilTag(std::unordered_map<size_t, std::shared_ptr<CamBase>> cameras,
                          int max_tag_features = 4096,
-                         double tag_size = 0.165,
                          const std::string &tag_family = "36h11");
 
   ~TrackAprilTag();
@@ -107,9 +105,6 @@ protected:
   apriltag_detector_t *detector_ = nullptr;
   apriltag_family_t *family_ = nullptr;
 #endif
-
-  /// Physical size of the tag (meters)
-  double tag_size_;
 
   /// Stride for feature ID encoding
   int max_tag_features_;

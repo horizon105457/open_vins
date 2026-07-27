@@ -149,7 +149,7 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
     trackTAG = std::make_shared<ov_core::TrackAprilTag>(
         state->_cam_intrinsics_cameras,
         state->_options.max_tag_features,
-        params.tag_size, params.tag_family);
+        params.tag_family);
 
     ov_msckf::UpdaterTag::Options tag_opt;
     tag_opt.chi2_multipler = params.up_tag_chi2_multipler;
@@ -170,7 +170,7 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
 
   // Make the updater!
   updaterMSCKF = std::make_shared<UpdaterMSCKF>(params.msckf_options, params.featinit_options);
-  updaterSLAM = std::make_shared<UpdaterSLAM>(params.slam_options, params.aruco_options, params.featinit_options);
+  updaterSLAM = std::make_shared<UpdaterSLAM>(params.slam_options, params.featinit_options);
 
   // If we are using zero velocity updates, then create the updater
   if (params.try_zupt) {
@@ -300,6 +300,87 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
 #if ENABLE_APRILTAG_TAGS
   if (params.use_tag && trackTAG != nullptr) {
     trackTAG->feed_new_camera(message);
+
+    // Tag-only initialization: when tag database is available, skip inertial
+    // init and directly set the initial IMU pose from the first PnP solution.
+    if (!is_initialized_vio && !params.tags.empty()) {
+      auto track_tag = std::dynamic_pointer_cast<ov_core::TrackAprilTag>(trackTAG);
+      if (track_tag != nullptr && updaterTAG != nullptr) {
+        auto candidates = track_tag->get_pnp_candidates();
+        for (auto &candidate : candidates) {
+          auto it_tag = params.tags.find(candidate.id);
+          if (it_tag == params.tags.end())
+            continue;
+          auto &tag_entry = it_tag->second;
+          auto camera = state->_cam_intrinsics_cameras.find(candidate.cam_id);
+          if (camera == state->_cam_intrinsics_cameras.end())
+            continue;
+          auto calib = state->_calib_IMUtoCAM.find(candidate.cam_id);
+          if (calib == state->_calib_IMUtoCAM.end())
+            continue;
+
+          // Run PnP
+          Eigen::Matrix<double, 7, 1> T_tag_cam;
+          Eigen::Matrix<double, 6, 6> I_pnp;
+          if (!updaterTAG->solve_pnp(candidate, camera->second, tag_entry.size, T_tag_cam, I_pnp))
+            continue;
+
+          // Chain to IMU frame
+          Eigen::Matrix3d R_ItoC = calib->second->Rot();
+          Eigen::Vector3d p_IinC = calib->second->pos();
+          Eigen::Matrix3d R_CtoI = R_ItoC.transpose();
+          Eigen::Vector3d p_CinI = -R_CtoI * p_IinC;
+          Eigen::Matrix3d R_tag_cam = ov_core::quat_2_Rot(T_tag_cam.head<4>());
+          Eigen::Vector3d p_tag_in_cam = T_tag_cam.tail<3>();
+          Eigen::Matrix3d R_tag_body = R_tag_cam * R_CtoI;
+          Eigen::Vector3d p_tag_in_body = p_tag_in_cam + R_tag_cam * p_CinI;
+          Eigen::Matrix<double, 7, 1> T_tag_body;
+          T_tag_body.head<4>() = ov_core::rot_2_quat(R_tag_body);
+          T_tag_body.tail<3>() = p_tag_in_body;
+
+          Eigen::Matrix<double, 6, 6> R_block = Eigen::Matrix<double, 6, 6>::Zero();
+          R_block.block<3, 3>(0, 0) = R_CtoI;
+          R_block.block<3, 3>(3, 3) = R_CtoI;
+          Eigen::Matrix<double, 6, 6> I_body = R_block * I_pnp * R_block.transpose();
+          Eigen::Matrix<double, 6, 6> I_world_imu =
+              updaterTAG->chain_information(tag_entry.info.asDiagonal(), I_body, tag_entry.pose, T_tag_body);
+
+          // Compute T_world_imu from tag prior
+          Eigen::Matrix<double, 4, 1> q_world_tag = tag_entry.pose.tail<4>();
+          Eigen::Matrix<double, 4, 1> q_tag_body = T_tag_body.head<4>();
+          Eigen::Matrix<double, 4, 1> q_world_imu = ov_core::quat_multiply(q_world_tag, q_tag_body);
+          Eigen::Vector3d p_world_imu =
+              tag_entry.pose.head<3>() + ov_core::quat_2_Rot(q_world_tag) * p_tag_in_body;
+
+          // Set initial state
+          Eigen::Matrix<double, 16, 1> imu_val;
+          imu_val.head<4>() = q_world_imu;
+          imu_val.segment<3>(4) = p_world_imu;
+          imu_val.segment<3>(7).setZero();  // vel
+          imu_val.segment<3>(10).setZero(); // bg
+          imu_val.segment<3>(13).setZero(); // ba
+          state->_imu->set_value(imu_val);
+          state->_imu->set_fej(imu_val);
+
+          // Set initial covariance from Fisher info
+          Eigen::MatrixXd Cov = Eigen::MatrixXd::Identity(state->_imu->size(), state->_imu->size());
+          Cov.block(0, 0, 3, 3) = 0.1 * Eigen::Matrix3d::Identity();   // orientation
+          Cov.block(3, 3, 3, 3) = I_world_imu.block<3,3>(3,3).inverse(); // position
+          Cov.block(6, 6, 3, 3) = 0.1 * Eigen::Matrix3d::Identity();   // velocity
+          Cov.block(9, 9, 3, 3) = 0.01 * Eigen::Matrix3d::Identity();  // bg
+          Cov.block(12, 12, 3, 3) = 0.01 * Eigen::Matrix3d::Identity(); // ba
+          StateHelper::set_initial_covariance(state, Cov, {state->_imu});
+
+          state->_timestamp = candidate.timestamp;
+          startup_time = candidate.timestamp;
+          is_initialized_vio = true;
+
+          PRINT_INFO(GREEN "[init]: tag-only init via id=%d (%.3f,%.3f,%.3f)\n" RESET,
+                     candidate.id, p_world_imu(0), p_world_imu(1), p_world_imu(2));
+          break;
+        }
+      }
+    }
   }
 #endif
   rT2 = boost::posix_time::microsec_clock::local_time();
@@ -343,13 +424,6 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
       }
       return;
     }
-#if ENABLE_APRILTAG_TAGS
-    if (params.use_tag) {
-      int idx = state->_imu->id();
-      state->Cov().block(idx + 3, idx + 3, 3, 3) = params.init_cov_pos * Eigen::Matrix3d::Identity();
-      state->Cov()(idx + 2, idx + 2) = params.init_cov_yaw;
-    }
-#endif
   }
 
   // Call on our propagate and update function
@@ -377,6 +451,21 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
     propagator->propagate_and_clone(state, message.timestamp);
   }
   rT3 = boost::posix_time::microsec_clock::local_time();
+
+  // TAG update: PnP-based absolute pose correction runs as early as frame 1,
+  // independent of clone history. Must execute before the clone-count early
+  // return so that tag-only initialization can correct the pose immediately.
+#if ENABLE_APRILTAG_TAGS
+  if (params.use_tag && updaterTAG != nullptr && trackTAG != nullptr) {
+    auto track_tag = std::dynamic_pointer_cast<ov_core::TrackAprilTag>(trackTAG);
+    if (track_tag != nullptr) {
+      auto candidates = track_tag->get_pnp_candidates();
+      if (!candidates.empty()) {
+        updaterTAG->update(candidates, state->_timestamp, params.tags);
+      }
+    }
+  }
+#endif
 
   // If we have not reached max clones, we should just return...
   // This isn't super ideal, but it keeps the logic after this easier...
@@ -407,11 +496,6 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Don't need to get the oldest features until we reach our max number of clones
   if ((int)state->_clones_IMU.size() > state->_options.max_clone_size || (int)state->_clones_IMU.size() > 5) {
     feats_marg = trackFEATS->get_feature_database()->features_containing(state->margtimestep(), false, true);
-#if ENABLE_APRILTAG_TAGS
-    if (trackTAG != nullptr && message.timestamp - startup_time >= params.dt_slam_delay) {
-      feats_slam = trackTAG->get_feature_database()->features_containing(state->margtimestep(), false, true);
-    }
-#endif
   }
 
   // Remove any lost features that were from other image streams
@@ -466,20 +550,12 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
     }
   }
 
-  int curr_tag_tags = 0;
-  auto it0 = state->_features_SLAM.begin();
-  while (it0 != state->_features_SLAM.end()) {
-    if (state->_options.is_tag_feature((int)(*it0).second->_featid))
-      curr_tag_tags++;
-    it0++;
-  }
-
   // Append a new SLAM feature if we have the room to do so
   // Also check that we have waited our delay amount (normally prevents bad first set of slam points)
   if (state->_options.max_slam_features > 0 && message.timestamp - startup_time >= params.dt_slam_delay &&
-      (int)state->_features_SLAM.size() < state->_options.max_slam_features + curr_tag_tags) {
+      (int)state->_features_SLAM.size() < state->_options.max_slam_features) {
     // Get the total amount to add, then the max amount that we can add given our marginalize feature array
-    int amount_to_add = (state->_options.max_slam_features + curr_tag_tags) - (int)state->_features_SLAM.size();
+    int amount_to_add = state->_options.max_slam_features - (int)state->_features_SLAM.size();
     int valid_amount = (amount_to_add > (int)feats_maxtracks.size()) ? (int)feats_maxtracks.size() : amount_to_add;
     // If we have at least 1 that we can add, lets add it!
     // Note: we remove them from the feat_marg array since we don't want to reuse information...
@@ -495,13 +571,6 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // NOTE: if you do not use FEJ, these types of slam features *degrade* the estimator performance....
   // NOTE: we will also marginalize SLAM features if they have failed their update a couple times in a row
   for (std::pair<const size_t, std::shared_ptr<Landmark>> &landmark : state->_features_SLAM) {
-#if ENABLE_APRILTAG_TAGS
-    if (trackTAG != nullptr) {
-      std::shared_ptr<Feature> feat1 = trackTAG->get_feature_database()->get_feature(landmark.second->_featid);
-      if (feat1 != nullptr)
-        feats_slam.push_back(feat1);
-    }
-#endif
     std::shared_ptr<Feature> feat2 = trackFEATS->get_feature_database()->get_feature(landmark.second->_featid);
     if (feat2 != nullptr)
       feats_slam.push_back(feat2);
@@ -516,7 +585,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
 
   // Lets marginalize out all old SLAM features here
   // These are ones that where not successfully tracked into the current frame
-  // We do *NOT* marginalize out our aruco tags landmarks
+  // We do *NOT* marginalize out tag landmarks (externally maintained)
   StateHelper::marginalize_slam(state);
 
   // Separate our SLAM features into new ones, and old ones
@@ -564,18 +633,6 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   updaterMSCKF->update(state, featsup_MSCKF);
   propagator->invalidate_cache();
   rT4 = boost::posix_time::microsec_clock::local_time();
-
-#if ENABLE_APRILTAG_TAGS
-  if (params.use_tag && updaterTAG != nullptr && trackTAG != nullptr) {
-    auto track_tag = std::dynamic_pointer_cast<ov_core::TrackAprilTag>(trackTAG);
-    if (track_tag != nullptr) {
-      auto candidates = track_tag->get_pnp_candidates();
-      if (!candidates.empty()) {
-        updaterTAG->update(candidates, state->_timestamp, params.tags);
-      }
-    }
-  }
-#endif
 
   // Perform SLAM delay init and update
   // NOTE: that we provide the option here to do a *sequential* update

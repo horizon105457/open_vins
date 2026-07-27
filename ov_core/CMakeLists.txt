@@ -13,7 +13,7 @@ message(STATUS "OPENCV: " ${OpenCV_VERSION} " | BOOST: " ${Boost_VERSION})
 
 # By default we build with ROS, but you can disable this and just build as a library
 option(ENABLE_ROS "Enable or disable building with ROS (if it is found)" ON)
-option(ENABLE_APRILTAG_TAGS "Enable or disable AprilTag support" OFF)
+option(ENABLE_APRILTAG_TAGS "Enable or disable AprilTag support" ON)
 if(ENABLE_APRILTAG_TAGS)
   add_subdirectory(thirdparty/apriltag)
 endif()

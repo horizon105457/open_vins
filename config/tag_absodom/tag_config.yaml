@@ -2,9 +2,21 @@
 
 # Known AprilTag world-positions database.
 # Each entry: tag ID → 6-DOF pose in world frame + per-axis uncertainty.
-# sigma = null means no prior information in that direction.
+# sigma = null / large means no prior information in that direction.
+# size = optional per-tag physical side length (m). Falls back to global tag_size.
+
 known_tag_positions:
-  # 0:
-  #   pose: [0.0, 0.0, 0.0,  0.0, 0.0, 0.0, 1.0]
-  #   sigma_rot: [0.005, 0.005, 0.005]
-  #   sigma_pos: [0.001, 0.001, 0.001]
+  # Tag 0: origin anchor — centre at [0,0,0], facing +X (tag normal = X axis).
+  # Ultra-high confidence: sigma_rot = 0.001 rad (~0.06°), sigma_pos = 0.0005 m (0.5 mm).
+  '0':
+    pose: [0.0, 0.0, 0.0,  0.7071068, 0.0, 0.0, 0.7071068]
+    size: 0.16
+    sigma_rot: [0.001, 0.001, 0.001]
+    sigma_pos: [0.0005, 0.0005, 0.0005]
+
+  # Add more tags here as needed, e.g.:
+  # '1':
+  #   pose: [1.0, 0.0, 0.0,  0.0, 0.0, 0.0, 1.0]
+  #   size: 0.08
+  #   sigma_rot: [0.01, 0.01, 0.01]
+  #   sigma_pos: [0.005, 0.005, 0.005]

@@ -82,10 +82,7 @@ public:
   void update(const std::vector<ov_core::TagDetection> &candidates, double t_tag,
               const std::map<int, TagEntry> &tag_db);
 
-protected:
-  bool pass_fine_filter(const ov_core::TagDetection &det,
-                        const std::map<int, TagEntry> &tag_db);
-
+  /// PnP: solve tag-to-camera pose from 4 corner correspondences
   bool solve_pnp(const ov_core::TagDetection &det,
                  const std::shared_ptr<ov_core::CamBase> &camera,
                  double tag_size, Eigen::Matrix<double, 7, 1> &T_tag_cam,
@@ -96,6 +93,10 @@ protected:
                     const Eigen::Matrix<double, 6, 6> &I_pnp_body,
                     const Eigen::Matrix<double, 7, 1> &T_world_tag,
                     const Eigen::Matrix<double, 7, 1> &T_tag_body);
+
+protected:
+  bool pass_fine_filter(const ov_core::TagDetection &det,
+                        const std::map<int, TagEntry> &tag_db);
 
   void whiten_and_update(const Eigen::Matrix<double, 7, 1> &z,
                           const Eigen::Matrix<double, 6, 6> &I_world_imu,

@@ -32,9 +32,10 @@ using namespace ov_core;
 
 TrackAprilTag::TrackAprilTag(
     std::unordered_map<size_t, std::shared_ptr<CamBase>> cameras,
-    int max_tag_features, double tag_size, const std::string &tag_family)
+    int max_tag_features,
+    const std::string &tag_family)
     : TrackBase(cameras, 0, 0, false, HistogramMethod::NONE),
-      tag_size_(tag_size), max_tag_features_(max_tag_features) {
+      max_tag_features_(max_tag_features) {
 #if ENABLE_APRILTAG_TAGS
   detector_ = apriltag_detector_create();
   if (detector_ == nullptr) {

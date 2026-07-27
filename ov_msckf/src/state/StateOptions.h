@@ -88,14 +88,6 @@ struct StateOptions {
   /// What representation our features are in (slam features)
   ov_type::LandmarkRepresentation::Representation feat_rep_slam = ov_type::LandmarkRepresentation::Representation::GLOBAL_3D;
 
-  /// What representation our features are in (tag features)
-  ov_type::LandmarkRepresentation::Representation feat_rep_tag = ov_type::LandmarkRepresentation::Representation::GLOBAL_3D;
-
-  /// Check if a feature ID belongs to a tag feature (AprilTag corner)
-  inline bool is_tag_feature(int featid) const {
-    return featid >= 0 && featid < 4 * max_tag_features;
-  }
-
   /// Nice print function of what parameters we have loaded
   void print(const std::shared_ptr<ov_core::YamlParser> &parser = nullptr) {
     if (parser != nullptr) {
@@ -138,9 +130,6 @@ struct StateOptions {
       std::string rep2 = ov_type::LandmarkRepresentation::as_string(feat_rep_slam);
       parser->parse_config("feat_rep_slam", rep2);
       feat_rep_slam = ov_type::LandmarkRepresentation::from_string(rep2);
-      std::string rep3 = ov_type::LandmarkRepresentation::as_string(feat_rep_tag);
-      parser->parse_config("feat_rep_tag", rep3);
-      feat_rep_tag = ov_type::LandmarkRepresentation::from_string(rep3);
 
       // IMU model
       std::string imu_model_str = "kalibr";
@@ -176,7 +165,6 @@ struct StateOptions {
     PRINT_DEBUG("  - max_cameras: %d\n", num_cameras);
     PRINT_DEBUG("  - feat_rep_msckf: %s\n", ov_type::LandmarkRepresentation::as_string(feat_rep_msckf).c_str());
     PRINT_DEBUG("  - feat_rep_slam: %s\n", ov_type::LandmarkRepresentation::as_string(feat_rep_slam).c_str());
-    PRINT_DEBUG("  - feat_rep_tag: %s\n", ov_type::LandmarkRepresentation::as_string(feat_rep_tag).c_str());
   }
 };
 

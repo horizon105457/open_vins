@@ -40,12 +40,11 @@ using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
 
-UpdaterSLAM::UpdaterSLAM(UpdaterOptions &options_slam, UpdaterOptions &options_aruco, ov_core::FeatureInitializerOptions &feat_init_options)
-    : _options_slam(options_slam), _options_tag(options_aruco) {
+UpdaterSLAM::UpdaterSLAM(UpdaterOptions &options_slam, ov_core::FeatureInitializerOptions &feat_init_options)
+    : _options_slam(options_slam) {
 
   // Save our raw pixel noise squared
   _options_slam.sigma_pix_sq = std::pow(_options_slam.sigma_pix, 2);
-  _options_tag.sigma_pix_sq = std::pow(_options_tag.sigma_pix, 2);
 
   // Save our feature initializer
   initializer_feat = std::shared_ptr<ov_core::FeatureInitializer>(new ov_core::FeatureInitializer(feat_init_options));
@@ -157,8 +156,7 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
     feat.timestamps = (*it2)->timestamps;
 
     // If we are using single inverse depth, then it is equivalent to using the msckf inverse depth
-    auto feat_rep =
-        (state->_options.is_tag_feature((int)feat.featid)) ? state->_options.feat_rep_tag : state->_options.feat_rep_slam;
+    auto feat_rep = state->_options.feat_rep_slam;
     feat.feat_representation = feat_rep;
     if (feat_rep == LandmarkRepresentation::Representation::ANCHORED_INVERSE_DEPTH_SINGLE) {
       feat.feat_representation = LandmarkRepresentation::Representation::ANCHORED_MSCKF_INVERSE_DEPTH;
@@ -223,13 +221,11 @@ void UpdaterSLAM::delayed_init(std::shared_ptr<State> state, std::vector<std::sh
     }
 
     // Measurement noise matrix
-    double sigma_pix_sq =
-        (state->_options.is_tag_feature((int)feat.featid)) ? _options_tag.sigma_pix_sq : _options_slam.sigma_pix_sq;
+    double sigma_pix_sq = _options_slam.sigma_pix_sq;
     Eigen::MatrixXd R = sigma_pix_sq * Eigen::MatrixXd::Identity(res.rows(), res.rows());
 
     // Try to initialize, delete new pointer if we failed
-    double chi2_multipler =
-        (state->_options.is_tag_feature((int)feat.featid)) ? _options_tag.chi2_multipler : _options_slam.chi2_multipler;
+    double chi2_multipler = _options_slam.chi2_multipler;
     if (StateHelper::initialize(state, landmark, Hx_order, H_x, H_f, R, res, chi2_multipler)) {
       state->_features_SLAM.insert({(*it2)->featid, landmark});
       (*it2)->to_delete = true;
@@ -389,8 +385,7 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
     // Chi2 distance check
     Eigen::MatrixXd P_marg = StateHelper::get_marginal_covariance(state, Hxf_order);
     Eigen::MatrixXd S = H_xf * P_marg * H_xf.transpose();
-    double sigma_pix_sq =
-        (state->_options.is_tag_feature((int)feat.featid)) ? _options_tag.sigma_pix_sq : _options_slam.sigma_pix_sq;
+    double sigma_pix_sq = _options_slam.sigma_pix_sq;
     S.diagonal() += sigma_pix_sq * Eigen::VectorXd::Ones(S.rows());
     double chi2 = res.dot(S.llt().solve(res));
 
@@ -405,23 +400,12 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
     }
 
     // Check if we should delete or not
-    double chi2_multipler =
-        (state->_options.is_tag_feature((int)feat.featid)) ? _options_tag.chi2_multipler : _options_slam.chi2_multipler;
+    double chi2_multipler = _options_slam.chi2_multipler;
     if (chi2 > chi2_multipler * chi2_check) {
-      if (state->_options.is_tag_feature((int)feat.featid)) {
-        PRINT_WARNING(YELLOW "[SLAM-UP]: rejecting aruco tag %d for chi2 thresh (%.3f > %.3f)\n" RESET, (int)feat.featid, chi2,
-                      chi2_multipler * chi2_check);
-      } else {
-        landmark->update_fail_count++;
-      }
+      landmark->update_fail_count++;
       (*it2)->to_delete = true;
       it2 = feature_vec.erase(it2);
       continue;
-    }
-
-    // Debug print when we are going to update the aruco tags
-    if (state->_options.is_tag_feature((int)feat.featid)) {
-      PRINT_DEBUG("[SLAM-UP]: accepted aruco tag %d for chi2 thresh (%.3f < %.3f)\n", (int)feat.featid, chi2, chi2_multipler * chi2_check);
     }
 
     // We are good!!! Append to our large H vector
